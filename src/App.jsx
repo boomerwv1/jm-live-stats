@@ -20,6 +20,30 @@ const EVENTS = [
 
 const PERIODS = ["Q1", "Q2", "Q3", "Q4", "OT"];
 
+// ✅ JM presets (Team 1 / James Monroe)
+const JM_BOYS_ROSTER_PRESET = `3 Hines
+10 Taylor
+12 Miller
+13 Surface
+20 Comer
+21 Gardinier
+22 Adkins
+23 Mann
+24 Parker
+25 Taylor
+30 Crislip
+33 Mann`;
+
+const JM_GIRLS_ROSTER_PRESET = `0 Dunlap
+2 Street
+4 Hill
+5 Long
+10 Griffith
+11 Moore
+12 Jackson
+13 Dunlap
+30 Smith`;
+
 function uuid() {
   return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random();
 }
@@ -27,7 +51,7 @@ function uuid() {
 function fmtClock(sec) {
   const s = Math.max(0, Math.floor(sec));
   const mm = String(Math.floor(s / 60)).padStart(2, "0");
-  const ss = String(s % 60).padStart(2, "0");
+  const ss = String(s % 60)).padStart(2, "0");
   return `${mm}:${ss}`;
 }
 
@@ -77,14 +101,17 @@ function jsonp(url, { timeoutMs = 12000 } = {}) {
     };
 
     function cleanup() {
-      try { delete window[cb]; } catch { window[cb] = undefined; }
+      try {
+        delete window[cb];
+      } catch {
+        window[cb] = undefined;
+      }
       if (script.parentNode) script.parentNode.removeChild(script);
     }
 
     document.body.appendChild(script);
   });
 }
-
 
 function apiUrlFor(apiUrl, params) {
   // Ensure we always start from a clean /exec base URL
@@ -126,7 +153,8 @@ function parseRoster(text, prefix) {
  * NOTE: apiUrl must be the /exec deployed URL.
  */
 function openPressSheet(apiUrl, tabName) {
-  const url = `${apiUrl}?view=presssheet&tab=${encodeURIComponent(tabName)}`;
+  const base = String(apiUrl || "").split("#")[0].split("?")[0];
+  const url = `${base}?view=presssheet&tab=${encodeURIComponent(tabName)}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
@@ -134,18 +162,17 @@ export default function App() {
   // --- persisted config
   const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("apiUrl") || ENDPOINT_DEFAULT);
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
-  const [homeTeam, setHomeTeam] = useState(localStorage.getItem("homeTeam") || "James Monroe");
-  const [awayTeam, setAwayTeam] = useState(localStorage.getItem("awayTeam") || "Opponent");
+  const [homeTeam, setHomeTeam] = useState(() => localStorage.getItem("homeTeam") || "James Monroe");
+  const [awayTeam, setAwayTeam] = useState(() => localStorage.getItem("awayTeam") || "Opponent");
 
   const [homeRosterText, setHomeRosterText] = useState(
-    localStorage.getItem("homeRosterText") ||
-      "12 Smith\n3 Jones\n1 Lee\n22 Davis\n5 Miller\n10 Martin\n11 Walker"
+    () => localStorage.getItem("homeRosterText") || JM_BOYS_ROSTER_PRESET
   );
-  const [awayRosterText, setAwayRosterText] = useState(
-    localStorage.getItem("awayRosterText") || "1 Brown\n2 Taylor\n3 Wilson\n4 Moore\n5 Clark\n10 Hall"
-  );
+  const [awayRosterText, setAwayRosterText] = useState(() => localStorage.getItem("awayRosterText") || "");
 
-
+  // ✅ Persist all config as user types
+  useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
+  useEffect(() => localStorage.setItem("token", token), [token]);
   useEffect(() => localStorage.setItem("homeTeam", homeTeam), [homeTeam]);
   useEffect(() => localStorage.setItem("awayTeam", awayTeam), [awayTeam]);
   useEffect(() => localStorage.setItem("homeRosterText", homeRosterText), [homeRosterText]);
@@ -161,7 +188,7 @@ export default function App() {
 
   // --- game state
   const [gameId, setGameId] = useState(
-    localStorage.getItem("gameId") || `JM_${new Date().toISOString().slice(0, 10)}_001`
+    () => localStorage.getItem("gameId") || `JM_${new Date().toISOString().slice(0, 10)}_001`
   );
   useEffect(() => localStorage.setItem("gameId", gameId), [gameId]);
 
@@ -182,7 +209,7 @@ export default function App() {
   const [pendingEvent, setPendingEvent] = useState(null);
 
   // remember last archive tab (from list_games)
-  const [lastArchiveTab, setLastArchiveTab] = useState(localStorage.getItem("lastArchiveTab") || "");
+  const [lastArchiveTab, setLastArchiveTab] = useState(() => localStorage.getItem("lastArchiveTab") || "");
   useEffect(() => localStorage.setItem("lastArchiveTab", lastArchiveTab), [lastArchiveTab]);
 
   // Keep selected team sane if user edits team names
@@ -231,34 +258,33 @@ export default function App() {
       setGamesError("Set API URL + token first.");
       return;
     }
-  
+
     setGamesLoading(true);
     setGamesError("");
-  
+
     try {
       // ✅ normalize /exec URL
       const base = String(apiUrl || "").split("#")[0].split("?")[0];
-  
+
       // ✅ build API url WITHOUT callback (jsonp() will add it)
       const url = apiUrlFor(base, {
         action: "list_games",
         access_token: token,
       });
-  
+
       console.log("LIST_GAMES URL (pre-jsonp):", url);
-  
+
       const data = await jsonp(url);
-  
+
       if (!data) throw new Error("No response (JSONP).");
       if (!data.ok) {
-        // nice message for auth failures
         const msg = String(data.error || "list_games failed");
         throw new Error(msg.toLowerCase().includes("unauthorized") ? "Unauthorized (check token in Config tab)" : msg);
       }
-  
+
       setGames(Array.isArray(data.games) ? data.games : []);
-  
-      // ✅ persist ONLY after a successful list
+
+      // ✅ persist after success (nice for GH Pages)
       localStorage.setItem("apiUrl", base);
       localStorage.setItem("token", token);
     } catch (err) {
@@ -348,18 +374,19 @@ export default function App() {
 
     try {
       await postNoCors(apiUrl, payload);
-    
+
       // ✅ Persist ONLY after a successful init_game
-      localStorage.setItem("apiUrl", apiUrl);
+      localStorage.setItem("apiUrl", String(apiUrl || "").split("#")[0].split("?")[0]);
       localStorage.setItem("token", token);
-    
+
       setStatus("Game initialized in sheet. Switching to game screen...");
       setScreen("game");
       setTimeout(() => setStatus("Ready."), 1000);
     } catch {
       setStatus("Init failed. Check endpoint/token.");
     }
-  } // ✅ CLOSE startGame()
+  }
+
   async function publishStat(playerId, eventType, delta = 1) {
     if (!apiUrl || !token) {
       setStatus("Set API URL + token.");
@@ -490,10 +517,12 @@ export default function App() {
             Apps Script URL
             <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} style={{ width: "100%", padding: 8 }} />
           </label>
+
           <label>
             Access Token
             <input value={token} onChange={(e) => setToken(e.target.value)} style={{ width: "100%", padding: 8 }} />
           </label>
+
           <label>
             Game ID
             <input value={gameId} onChange={(e) => setGameId(e.target.value)} style={{ width: "100%", padding: 8 }} />
@@ -513,12 +542,36 @@ export default function App() {
 
         <div style={card}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 1 Roster (one per line: “# Name”)</div>
-          <textarea value={homeRosterText} onChange={(e) => setHomeRosterText(e.target.value)} rows={7} style={{ width: "100%", padding: 8 }} />
+
+          {/* ✅ Preset buttons */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <button
+              onClick={() => {
+                setHomeTeam("James Monroe");
+                setHomeRosterText(JM_BOYS_ROSTER_PRESET);
+              }}
+              style={{ padding: 10, borderRadius: 12, fontWeight: 900 }}
+            >
+              Load JM Boys
+            </button>
+
+            <button
+              onClick={() => {
+                setHomeTeam("James Monroe");
+                setHomeRosterText(JM_GIRLS_ROSTER_PRESET);
+              }}
+              style={{ padding: 10, borderRadius: 12, fontWeight: 900 }}
+            >
+              Load JM Girls
+            </button>
+          </div>
+
+          <textarea value={homeRosterText} onChange={(e) => setHomeRosterText(e.target.value)} rows={8} style={{ width: "100%", padding: 8 }} />
         </div>
 
         <div style={card}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 2 Roster (one per line: “# Name”)</div>
-          <textarea value={awayRosterText} onChange={(e) => setAwayRosterText(e.target.value)} rows={7} style={{ width: "100%", padding: 8 }} />
+          <textarea value={awayRosterText} onChange={(e) => setAwayRosterText(e.target.value)} rows={8} style={{ width: "100%", padding: 8 }} />
         </div>
 
         <button onClick={startGame} style={{ width: "100%", marginTop: 12, padding: 14, fontWeight: 900, borderRadius: 12 }}>
@@ -567,10 +620,7 @@ export default function App() {
 
         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
           {games.map((g, idx) => (
-            <div
-              key={`${idx}-${g.game_id}-${g.archive_tab || ""}-${g.archived_at_iso || ""}`}
-              style={{ padding: 12, border: "1px solid #ddd", borderRadius: 12 }}
-            >
+            <div key={`${idx}-${g.game_id}-${g.archive_tab || ""}-${g.archived_at_iso || ""}`} style={{ padding: 12, border: "1px solid #ddd", borderRadius: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 900 }}>
                   {g.date_iso ? `${String(g.date_iso).slice(0, 10)} — ` : ""}
@@ -583,10 +633,7 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => resumeGame(g.game_id, g.archive_tab)}
-                  style={{ padding: "10px 12px", borderRadius: 12, fontWeight: 900 }}
-                >
+                <button onClick={() => resumeGame(g.game_id, g.archive_tab)} style={{ padding: "10px 12px", borderRadius: 12, fontWeight: 900 }}>
                   Resume
                 </button>
 
