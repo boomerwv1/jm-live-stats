@@ -25,23 +25,23 @@ const JM_BOYS_ROSTER_PRESET = `3 Hines
 10 Taylor
 12 Miller
 13 Surface
+33 Mann
 20 Comer
 21 Gardinier
 22 Adkins
 23 Mann
 24 Parker
 25 Taylor
-30 Crislip
-33 Mann`;
+30 Crislip`;
 
 const JM_GIRLS_ROSTER_PRESET = `0 Dunlap
-2 Street
-4 Hill
+13 Dunlap
 5 Long
 10 Griffith
 11 Moore
+2 Street
+4 Hill
 12 Jackson
-13 Dunlap
 30 Smith`;
 
 function uuid() {
