@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-const ENDPOINT_DEFAULT =
-  "https://script.google.com/macros/s/AKfycbylXaA_x1Uw5NNYYJV106qkraj-dq9gBZs8s_Ly1nP80Vtb6wuVSsWcWW8JujL3vyNYAA/exec";
-
+const ENDPOINT_DEFAULT = import.meta.env.VITE_GAS_WEBAPP_URL || "";
 
 const EVENTS = [
   ["2M", "2 MAKE"],
@@ -134,8 +132,8 @@ function openPressSheet(apiUrl, tabName) {
 
 export default function App() {
   // --- persisted config
-  const [apiUrl, setApiUrl] = useState(localStorage.getItem("apiUrl") || ENDPOINT_DEFAULT);
-  const [token, setToken] = useState(localStorage.getItem("token") || "");
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("apiUrl") || ENDPOINT_DEFAULT);
+  const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [homeTeam, setHomeTeam] = useState(localStorage.getItem("homeTeam") || "James Monroe");
   const [awayTeam, setAwayTeam] = useState(localStorage.getItem("awayTeam") || "Opponent");
 
@@ -147,8 +145,7 @@ export default function App() {
     localStorage.getItem("awayRosterText") || "1 Brown\n2 Taylor\n3 Wilson\n4 Moore\n5 Clark\n10 Hall"
   );
 
-  useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
-  useEffect(() => localStorage.setItem("token", token), [token]);
+
   useEffect(() => localStorage.setItem("homeTeam", homeTeam), [homeTeam]);
   useEffect(() => localStorage.setItem("awayTeam", awayTeam), [awayTeam]);
   useEffect(() => localStorage.setItem("homeRosterText", homeRosterText), [homeRosterText]);
@@ -234,20 +231,41 @@ export default function App() {
       setGamesError("Set API URL + token first.");
       return;
     }
+  
     setGamesLoading(true);
     setGamesError("");
+  
     try {
-      const url = apiUrlFor(apiUrl, { action: "list_games", access_token: token });
-      console.log("LIST_GAMES URL:", url);
+      // ✅ normalize /exec URL
+      const base = String(apiUrl || "").split("#")[0].split("?")[0];
+  
+      // ✅ build API url WITHOUT callback (jsonp() will add it)
+      const url = apiUrlFor(base, {
+        action: "list_games",
+        access_token: token,
+      });
+  
+      console.log("LIST_GAMES URL (pre-jsonp):", url);
+  
       const data = await jsonp(url);
-      if (!data || !data.ok) throw new Error((data && data.error) || "list_games failed");
+  
+      if (!data) throw new Error("No response (JSONP).");
+      if (!data.ok) {
+        // nice message for auth failures
+        const msg = String(data.error || "list_games failed");
+        throw new Error(msg.toLowerCase().includes("unauthorized") ? "Unauthorized (check token in Config tab)" : msg);
+      }
+  
       setGames(Array.isArray(data.games) ? data.games : []);
+  
+      // ✅ persist ONLY after a successful list
+      localStorage.setItem("apiUrl", base);
+      localStorage.setItem("token", token);
     } catch (err) {
-      setGamesError(String(err.message || err));
+      setGamesError(String(err?.message || err));
     } finally {
       setGamesLoading(false);
     }
-    
   }
 
   // ✅ JSONP get_game_state
@@ -330,13 +348,17 @@ export default function App() {
 
     try {
       await postNoCors(apiUrl, payload);
+    
+      // ✅ Persist ONLY after a successful init_game
+      localStorage.setItem("apiUrl", apiUrl);
+      localStorage.setItem("token", token);
+    
       setStatus("Game initialized in sheet. Switching to game screen...");
       setScreen("game");
       setTimeout(() => setStatus("Ready."), 1000);
     } catch {
       setStatus("Init failed. Check endpoint/token.");
     }
-  }
 
   async function publishStat(playerId, eventType, delta = 1) {
     if (!apiUrl || !token) {
