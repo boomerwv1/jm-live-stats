@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-const ENDPOINT_DEFAULT = import.meta.env.VITE_GAS_WEBAPP_URL || "";
+// ✅ HARDCODED GAS WEB APP URL (works on all devices)
+const ENDPOINT_DEFAULT =
+  "https://script.google.com/macros/s/AKfycbylXaA_x1Uw5NNYYJV106qkraj-dq9gBZs8s_Ly1nP80Vtb6wuVSsWcWW8JujL3vyNYAA/exec";
 
 const EVENTS = [
   ["2M", "2 MAKE"],
@@ -156,7 +158,9 @@ function openPressSheet(apiUrl, tabName) {
 
 export default function App() {
   // --- persisted config
-  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("apiUrl") || ENDPOINT_DEFAULT);
+  // ✅ use hardcoded URL (do NOT allow localStorage to override)
+  const [apiUrl, setApiUrl] = useState(() => ENDPOINT_DEFAULT);
+
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [homeTeam, setHomeTeam] = useState(() => localStorage.getItem("homeTeam") || "James Monroe");
   const [awayTeam, setAwayTeam] = useState(() => localStorage.getItem("awayTeam") || "Opponent");
@@ -166,7 +170,9 @@ export default function App() {
   );
   const [awayRosterText, setAwayRosterText] = useState(() => localStorage.getItem("awayRosterText") || "");
 
-  useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
+  // ✅ do NOT persist apiUrl anymore (prevents device drift / bad cached URL)
+  // useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
+
   useEffect(() => localStorage.setItem("token", token), [token]);
   useEffect(() => localStorage.setItem("homeTeam", homeTeam), [homeTeam]);
   useEffect(() => localStorage.setItem("awayTeam", awayTeam), [awayTeam]);
@@ -274,7 +280,8 @@ export default function App() {
       }
 
       setGames(Array.isArray(data.games) ? data.games : []);
-      localStorage.setItem("apiUrl", base);
+
+      // ✅ we still persist token; URL is hardcoded
       localStorage.setItem("token", token);
     } catch (err) {
       setGamesError(String(err?.message || err));
@@ -357,18 +364,20 @@ export default function App() {
       else setAwayOn(awayRoster.slice(0, 5).map((p) => p.player_id));
 
       // ✅ playtime: if present, load; else reset
-      const pth = (g.playtime_home && typeof g.playtime_home === "object") ? g.playtime_home : null;
-      const pta = (g.playtime_away && typeof g.playtime_away === "object") ? g.playtime_away : null;
+      const pth = g.playtime_home && typeof g.playtime_home === "object" ? g.playtime_home : null;
+      const pta = g.playtime_away && typeof g.playtime_away === "object" ? g.playtime_away : null;
 
       if (pth) setHomePT(pth);
       else {
-        const h = {}; homeRoster.forEach((p) => (h[p.player_id] = 0));
+        const h = {};
+        homeRoster.forEach((p) => (h[p.player_id] = 0));
         setHomePT(h);
       }
 
       if (pta) setAwayPT(pta);
       else {
-        const a = {}; awayRoster.forEach((p) => (a[p.player_id] = 0));
+        const a = {};
+        awayRoster.forEach((p) => (a[p.player_id] = 0));
         setAwayPT(a);
       }
 
@@ -430,7 +439,8 @@ export default function App() {
 
     try {
       await postNoCors(apiUrl, payload);
-      localStorage.setItem("apiUrl", String(apiUrl || "").split("#")[0].split("?")[0]);
+
+      // ✅ URL is hardcoded; we only persist token
       localStorage.setItem("token", token);
 
       setStatus("Game initialized. Select starters…");
@@ -590,7 +600,6 @@ export default function App() {
     if (screen !== "game") return;
 
     const t = setInterval(() => {
-      // don't spam if no rosters
       if (Object.keys(homePT).length === 0 && Object.keys(awayPT).length === 0) return;
       publishPlaytime();
     }, 15000);
@@ -619,9 +628,10 @@ export default function App() {
         <h2 style={{ margin: "8px 0" }}>JM Live Stats — Setup</h2>
 
         <div style={card}>
+          {/* ✅ show the hardcoded URL (read-only) */}
           <label>
-            Apps Script URL
-            <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} style={{ width: "100%", padding: 8 }} />
+            Apps Script URL (hardcoded)
+            <input value={apiUrl} readOnly style={{ width: "100%", padding: 8, opacity: 0.85 }} />
           </label>
 
           <label>
@@ -740,7 +750,9 @@ export default function App() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div style={card}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>{homeTeam} ({homeOn.length}/5)</div>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>
+              {homeTeam} ({homeOn.length}/5)
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
               {homeRoster.map((p) => (
                 <button
@@ -760,7 +772,9 @@ export default function App() {
           </div>
 
           <div style={card}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>{awayTeam} ({awayOn.length}/5)</div>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>
+              {awayTeam} ({awayOn.length}/5)
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
               {awayRoster.map((p) => (
                 <button
@@ -796,10 +810,7 @@ export default function App() {
           SAVE STARTERS + START GAME UI
         </button>
 
-        <button
-          onClick={() => setScreen("setup")}
-          style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 12 }}
-        >
+        <button onClick={() => setScreen("setup")} style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 12 }}>
           Back to Setup
         </button>
 
@@ -914,8 +925,12 @@ export default function App() {
       </div>
 
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-        <div><b>{homeTeam}</b> starters: {startersTextHome || "(not set)"} </div>
-        <div><b>{awayTeam}</b> starters: {startersTextAway || "(not set)"} </div>
+        <div>
+          <b>{homeTeam}</b> starters: {startersTextHome || "(not set)"}{" "}
+        </div>
+        <div>
+          <b>{awayTeam}</b> starters: {startersTextAway || "(not set)"}{" "}
+        </div>
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
@@ -1105,3 +1120,4 @@ export default function App() {
     </div>
   );
 }
+
