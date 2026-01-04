@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const ENDPOINT_DEFAULT = import.meta.env.VITE_GAS_WEBAPP_URL || "";
 
@@ -51,7 +51,14 @@ function uuid() {
 function fmtClock(sec) {
   const s = Math.max(0, Math.floor(sec));
   const mm = String(Math.floor(s / 60)).padStart(2, "0");
-  const ss = String(s % 60).padStart(2, "0"); // ✅ fixed (removed extra ')')
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function fmtMinutesFromSec(sec) {
+  const s = Math.max(0, Math.floor(Number(sec || 0)));
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
   return `${mm}:${ss}`;
 }
 
@@ -69,8 +76,6 @@ function jsonp(url, { timeoutMs = 12000 } = {}) {
   return new Promise((resolve, reject) => {
     const cb = "cb_" + Math.random().toString(36).slice(2);
     const full = url + (url.includes("?") ? "&" : "?") + "callback=" + cb;
-
-    console.log("[JSONP] Loading:", full);
 
     let done = false;
     const script = document.createElement("script");
@@ -114,9 +119,7 @@ function jsonp(url, { timeoutMs = 12000 } = {}) {
 }
 
 function apiUrlFor(apiUrl, params) {
-  // Ensure we always start from a clean /exec base URL
   const base = String(apiUrl || "").split("#")[0].split("?")[0];
-
   const u = new URL(base);
   u.searchParams.set("view", "api");
 
@@ -127,9 +130,6 @@ function apiUrlFor(apiUrl, params) {
   return u.toString();
 }
 
-// Parse roster lines like:
-// 12 Smith
-// 3 Jones
 function parseRoster(text, prefix) {
   const lines = text
     .split("\n")
@@ -142,16 +142,12 @@ function parseRoster(text, prefix) {
     if (!m) continue;
     const jersey = m[1];
     const name = m[2].trim();
-    const player_id = `${prefix}${jersey}`; // simple stable id
+    const player_id = `${prefix}${jersey}`;
     roster.push({ player_id, jersey, name });
   }
   return roster;
 }
 
-/**
- * Opens the Apps Script press sheet HTML view in a new tab.
- * NOTE: apiUrl must be the /exec deployed URL.
- */
 function openPressSheet(apiUrl, tabName) {
   const base = String(apiUrl || "").split("#")[0].split("?")[0];
   const url = `${base}?view=presssheet&tab=${encodeURIComponent(tabName)}`;
@@ -170,7 +166,6 @@ export default function App() {
   );
   const [awayRosterText, setAwayRosterText] = useState(() => localStorage.getItem("awayRosterText") || "");
 
-  // ✅ Persist all config as user types
   useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
   useEffect(() => localStorage.setItem("token", token), [token]);
   useEffect(() => localStorage.setItem("homeTeam", homeTeam), [homeTeam]);
@@ -179,7 +174,7 @@ export default function App() {
   useEffect(() => localStorage.setItem("awayRosterText", awayRosterText), [awayRosterText]);
 
   // --- screens
-  const [screen, setScreen] = useState("setup"); // setup | previous | game
+  const [screen, setScreen] = useState("setup"); // setup | starters | previous | game
 
   // --- previous games state
   const [games, setGames] = useState([]);
@@ -196,23 +191,14 @@ export default function App() {
   const [clockSec, setClockSec] = useState(8 * 60);
   const [running, setRunning] = useState(false);
 
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setClockSec((s) => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
-  }, [running]);
-
   const [status, setStatus] = useState("");
 
-  // IMPORTANT: team is now the TEAM NAME (not "HOME"/"AWAY")
   const [team, setTeam] = useState(homeTeam);
   const [pendingEvent, setPendingEvent] = useState(null);
 
-  // remember last archive tab (from list_games)
   const [lastArchiveTab, setLastArchiveTab] = useState(() => localStorage.getItem("lastArchiveTab") || "");
   useEffect(() => localStorage.setItem("lastArchiveTab", lastArchiveTab), [lastArchiveTab]);
 
-  // Keep selected team sane if user edits team names
   useEffect(() => {
     if (team !== homeTeam && team !== awayTeam) setTeam(homeTeam);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,8 +207,13 @@ export default function App() {
   const homeRoster = useMemo(() => parseRoster(homeRosterText, "H"), [homeRosterText]);
   const awayRoster = useMemo(() => parseRoster(awayRosterText, "A"), [awayRosterText]);
 
+  // ✅ starters/on-floor state (IDs)
   const [homeOn, setHomeOn] = useState([]);
   const [awayOn, setAwayOn] = useState([]);
+
+  // ✅ playtime maps (player_id -> seconds)
+  const [homePT, setHomePT] = useState({});
+  const [awayPT, setAwayPT] = useState({});
 
   // SUB mode
   const [subMode, setSubMode] = useState(false);
@@ -247,9 +238,18 @@ export default function App() {
     return roster.filter((p) => !on.has(p.player_id));
   }, [isHomeSelected, homeRoster, awayRoster, homeOn, awayOn]);
 
-  function initStarting5() {
+  function initDefaultStarting5() {
     setHomeOn(homeRoster.slice(0, 5).map((p) => p.player_id));
     setAwayOn(awayRoster.slice(0, 5).map((p) => p.player_id));
+  }
+
+  function initPlaytimeZeros() {
+    const h = {};
+    const a = {};
+    homeRoster.forEach((p) => (h[p.player_id] = 0));
+    awayRoster.forEach((p) => (a[p.player_id] = 0));
+    setHomePT(h);
+    setAwayPT(a);
   }
 
   // ✅ JSONP list_games
@@ -263,17 +263,8 @@ export default function App() {
     setGamesError("");
 
     try {
-      // ✅ normalize /exec URL
       const base = String(apiUrl || "").split("#")[0].split("?")[0];
-
-      // ✅ build API url WITHOUT callback (jsonp() will add it)
-      const url = apiUrlFor(base, {
-        action: "list_games",
-        access_token: token,
-      });
-
-      console.log("LIST_GAMES URL (pre-jsonp):", url);
-
+      const url = apiUrlFor(base, { action: "list_games", access_token: token });
       const data = await jsonp(url);
 
       if (!data) throw new Error("No response (JSONP).");
@@ -283,14 +274,51 @@ export default function App() {
       }
 
       setGames(Array.isArray(data.games) ? data.games : []);
-
-      // ✅ persist after success (nice for GH Pages)
       localStorage.setItem("apiUrl", base);
       localStorage.setItem("token", token);
     } catch (err) {
       setGamesError(String(err?.message || err));
     } finally {
       setGamesLoading(false);
+    }
+  }
+
+  // ✅ send starters to sheet (and leave lineup as the starters)
+  async function publishStarters() {
+    if (!apiUrl || !token) return;
+    if (homeOn.length !== 5 || awayOn.length !== 5) {
+      setStatus("Need exactly 5 starters for each team.");
+      return;
+    }
+    const payload = {
+      access_token: token,
+      action: "set_starters",
+      starters_home: homeOn,
+      starters_away: awayOn,
+    };
+    try {
+      await postNoCors(apiUrl, payload);
+      setStatus("Starters saved to sheet.");
+    } catch {
+      setStatus("Failed saving starters.");
+    }
+  }
+
+  // ✅ send playtime to sheet
+  async function publishPlaytime() {
+    if (!apiUrl || !token) return;
+
+    const payload = {
+      access_token: token,
+      action: "set_playtime",
+      playtime_home: homePT,
+      playtime_away: awayPT,
+    };
+
+    try {
+      await postNoCors(apiUrl, payload);
+    } catch {
+      // silent: this runs frequently
     }
   }
 
@@ -318,7 +346,32 @@ export default function App() {
       setPeriod(g.period || "Q1");
       setClockSec(Number.isFinite(g.clock_sec) ? g.clock_sec : 8 * 60);
 
-      initStarting5();
+      // ✅ starters: if present, use those; else default first 5
+      const sh = Array.isArray(g.starters_home) ? g.starters_home : null;
+      const sa = Array.isArray(g.starters_away) ? g.starters_away : null;
+
+      if (sh && sh.length === 5) setHomeOn(sh);
+      else setHomeOn(homeRoster.slice(0, 5).map((p) => p.player_id));
+
+      if (sa && sa.length === 5) setAwayOn(sa);
+      else setAwayOn(awayRoster.slice(0, 5).map((p) => p.player_id));
+
+      // ✅ playtime: if present, load; else reset
+      const pth = (g.playtime_home && typeof g.playtime_home === "object") ? g.playtime_home : null;
+      const pta = (g.playtime_away && typeof g.playtime_away === "object") ? g.playtime_away : null;
+
+      if (pth) setHomePT(pth);
+      else {
+        const h = {}; homeRoster.forEach((p) => (h[p.player_id] = 0));
+        setHomePT(h);
+      }
+
+      if (pta) setAwayPT(pta);
+      else {
+        const a = {}; awayRoster.forEach((p) => (a[p.player_id] = 0));
+        setAwayPT(a);
+      }
+
       setRunning(false);
       setPendingEvent(null);
       setSubMode(false);
@@ -354,11 +407,14 @@ export default function App() {
       return;
     }
 
-    initStarting5();
     setPeriod("Q1");
     setClockSec(8 * 60);
     setRunning(false);
     setTeam(homeTeam);
+
+    // init starter selection defaults + playtime
+    initDefaultStarting5();
+    initPlaytimeZeros();
 
     const payload = {
       access_token: token,
@@ -374,14 +430,11 @@ export default function App() {
 
     try {
       await postNoCors(apiUrl, payload);
-
-      // ✅ Persist ONLY after a successful init_game
       localStorage.setItem("apiUrl", String(apiUrl || "").split("#")[0].split("?")[0]);
       localStorage.setItem("token", token);
 
-      setStatus("Game initialized in sheet. Switching to game screen...");
-      setScreen("game");
-      setTimeout(() => setStatus("Ready."), 1000);
+      setStatus("Game initialized. Select starters…");
+      setScreen("starters");
     } catch {
       setStatus("Init failed. Check endpoint/token.");
     }
@@ -481,6 +534,10 @@ export default function App() {
       setStatus("Set API URL + token.");
       return;
     }
+
+    // push latest playtime before archive
+    await publishPlaytime();
+
     const payload = {
       access_token: token,
       action: "end_game",
@@ -503,6 +560,55 @@ export default function App() {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, period, clockSec, homeTeam, awayTeam, gameId]);
+
+  // ✅ game clock + playtime tick
+  useEffect(() => {
+    if (screen !== "game") return;
+    if (!running) return;
+
+    const t = setInterval(() => {
+      setClockSec((s) => Math.max(0, s - 1));
+
+      // add 1 second to on-floor players for BOTH teams
+      setHomePT((prev) => {
+        const next = { ...prev };
+        homeOn.forEach((pid) => (next[pid] = (next[pid] || 0) + 1));
+        return next;
+      });
+      setAwayPT((prev) => {
+        const next = { ...prev };
+        awayOn.forEach((pid) => (next[pid] = (next[pid] || 0) + 1));
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(t);
+  }, [screen, running, homeOn, awayOn]);
+
+  // ✅ publish playtime periodically while in game screen
+  useEffect(() => {
+    if (screen !== "game") return;
+
+    const t = setInterval(() => {
+      // don't spam if no rosters
+      if (Object.keys(homePT).length === 0 && Object.keys(awayPT).length === 0) return;
+      publishPlaytime();
+    }, 15000);
+
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, apiUrl, token, homePT, awayPT]);
+
+  // ✅ when clock stops, push playtime immediately
+  const lastRunningRef = useRef(running);
+  useEffect(() => {
+    if (screen !== "game") return;
+    if (lastRunningRef.current === true && running === false) {
+      publishPlaytime();
+    }
+    lastRunningRef.current = running;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, screen]);
 
   const card = { padding: 10, border: "1px solid #ddd", borderRadius: 12, marginTop: 12 };
 
@@ -543,7 +649,6 @@ export default function App() {
         <div style={card}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 1 Roster (one per line: “# Name”)</div>
 
-          {/* ✅ Preset buttons */}
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
               onClick={() => {
@@ -586,6 +691,116 @@ export default function App() {
           style={{ width: "100%", marginTop: 10, padding: 14, fontWeight: 900, borderRadius: 12 }}
         >
           PREVIOUS GAMES (resume / press sheet)
+        </button>
+
+        <div style={{ marginTop: 12, padding: 10, border: "1px solid #eee", borderRadius: 12 }}>
+          <div style={{ fontWeight: 700 }}>Status:</div>
+          <div style={{ fontSize: 13 }}>{status || "Ready."}</div>
+        </div>
+      </div>
+    );
+  }
+
+  // STARTERS SCREEN
+  if (screen === "starters") {
+    const hSelected = new Set(homeOn);
+    const aSelected = new Set(awayOn);
+
+    const toggleStarter = (which, pid) => {
+      if (which === "home") {
+        setHomeOn((cur) => {
+          const set = new Set(cur);
+          if (set.has(pid)) set.delete(pid);
+          else {
+            if (set.size >= 5) return cur;
+            set.add(pid);
+          }
+          return Array.from(set);
+        });
+      } else {
+        setAwayOn((cur) => {
+          const set = new Set(cur);
+          if (set.has(pid)) set.delete(pid);
+          else {
+            if (set.size >= 5) return cur;
+            set.add(pid);
+          }
+          return Array.from(set);
+        });
+      }
+    };
+
+    return (
+      <div style={{ fontFamily: "system-ui", padding: 12, maxWidth: 760, margin: "0 auto" }}>
+        <h2 style={{ margin: "8px 0" }}>Select Starters</h2>
+
+        <div style={{ opacity: 0.8, marginBottom: 8 }}>
+          Pick exactly <b>5</b> for each team. This will persist + print on the press sheet.
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={card}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>{homeTeam} ({homeOn.length}/5)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {homeRoster.map((p) => (
+                <button
+                  key={p.player_id}
+                  onClick={() => toggleStarter("home", p.player_id)}
+                  style={{
+                    padding: 10,
+                    borderRadius: 12,
+                    fontWeight: 900,
+                    border: hSelected.has(p.player_id) ? "2px solid #000" : "1px solid #ddd",
+                  }}
+                >
+                  #{p.jersey}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>{awayTeam} ({awayOn.length}/5)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {awayRoster.map((p) => (
+                <button
+                  key={p.player_id}
+                  onClick={() => toggleStarter("away", p.player_id)}
+                  style={{
+                    padding: 10,
+                    borderRadius: 12,
+                    fontWeight: 900,
+                    border: aSelected.has(p.player_id) ? "2px solid #000" : "1px solid #ddd",
+                  }}
+                >
+                  #{p.jersey}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={async () => {
+            if (homeOn.length !== 5 || awayOn.length !== 5) {
+              setStatus("Must pick exactly 5 starters per team.");
+              return;
+            }
+            await publishStarters();
+            await publishPlaytime(); // initial 0s
+            setScreen("game");
+            setStatus("Ready.");
+          }}
+          style={{ width: "100%", marginTop: 12, padding: 14, borderRadius: 12, fontWeight: 950 }}
+        >
+          SAVE STARTERS + START GAME UI
+        </button>
+
+        <button
+          onClick={() => setScreen("setup")}
+          style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 12 }}
+        >
+          Back to Setup
         </button>
 
         <div style={{ marginTop: 12, padding: 10, border: "1px solid #eee", borderRadius: 12 }}>
@@ -665,6 +880,9 @@ export default function App() {
   }
 
   // GAME
+  const startersTextHome = homeOnPlayers.map((p) => `#${p.jersey}`).join(", ");
+  const startersTextAway = awayOnPlayers.map((p) => `#${p.jersey}`).join(", ");
+
   return (
     <div style={{ fontFamily: "system-ui", padding: 12, maxWidth: 560, margin: "0 auto" }}>
       <h2 style={{ margin: "8px 0" }}>JM Live Stats</h2>
@@ -693,6 +911,11 @@ export default function App() {
             </button>
           </div>
         </div>
+      </div>
+
+      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+        <div><b>{homeTeam}</b> starters: {startersTextHome || "(not set)"} </div>
+        <div><b>{awayTeam}</b> starters: {startersTextAway || "(not set)"} </div>
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
@@ -737,20 +960,25 @@ export default function App() {
           <div style={{ fontWeight: 900, marginBottom: 8 }}>
             Select player ({team}) {pendingEvent ? `— ${pendingEvent}` : "(tap an event)"}
           </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-            {onFloorPlayers.map((p) => (
-              <button
-                key={p.player_id}
-                disabled={!pendingEvent}
-                onClick={() => {
-                  publishStat(p.player_id, pendingEvent, 1);
-                  setPendingEvent(null);
-                }}
-                style={{ padding: 12, borderRadius: 12, fontWeight: 900, opacity: pendingEvent ? 1 : 0.5 }}
-              >
-                #{p.jersey}
-              </button>
-            ))}
+            {onFloorPlayers.map((p) => {
+              const sec = isHomeSelected ? homePT[p.player_id] : awayPT[p.player_id];
+              return (
+                <button
+                  key={p.player_id}
+                  disabled={!pendingEvent}
+                  onClick={() => {
+                    publishStat(p.player_id, pendingEvent, 1);
+                    setPendingEvent(null);
+                  }}
+                  style={{ padding: 12, borderRadius: 12, fontWeight: 900, opacity: pendingEvent ? 1 : 0.5 }}
+                  title={`Minutes: ${fmtMinutesFromSec(sec || 0)}`}
+                >
+                  #{p.jersey}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -813,6 +1041,10 @@ export default function App() {
                 return;
               }
               await publishSub(team, subOut, subIn);
+
+              // ✅ push playtime after lineup changes
+              await publishPlaytime();
+
               setSubOut("");
               setSubIn("");
             }}
