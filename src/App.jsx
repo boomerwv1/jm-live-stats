@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// ✅ HARDCODED GAS WEB APP URL (works on all devices)
+// ✅ SINGLE SOURCE OF TRUTH for the GAS Web App URL (change this ONE line on new deployments)
 const ENDPOINT_DEFAULT =
   "https://script.google.com/macros/s/AKfycbylXaA_x1Uw5NNYYJV106qkraj-dq9gBZs8s_Ly1nP80Vtb6wuVSsWcWW8JujL3vyNYAA/exec";
+
+// ✅ App always uses this URL (no localStorage, no user-edit, no drift)
+const API_URL = ENDPOINT_DEFAULT;
 
 const EVENTS = [
   ["2M", "2 MAKE"],
@@ -157,10 +160,17 @@ function openPressSheet(apiUrl, tabName) {
 }
 
 export default function App() {
-  // --- persisted config
-  // ✅ use hardcoded URL (do NOT allow localStorage to override)
-  const [apiUrl, setApiUrl] = useState(() => ENDPOINT_DEFAULT);
+  // ✅ always use the hardcoded deployment URL
+  const apiUrl = API_URL;
 
+  // ✅ clean up any legacy cached URL from older builds (prevents drift forever)
+  useEffect(() => {
+    try {
+      localStorage.removeItem("apiUrl");
+    } catch {}
+  }, []);
+
+  // --- persisted config (token + teams + rosters)
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [homeTeam, setHomeTeam] = useState(() => localStorage.getItem("homeTeam") || "James Monroe");
   const [awayTeam, setAwayTeam] = useState(() => localStorage.getItem("awayTeam") || "Opponent");
@@ -169,9 +179,6 @@ export default function App() {
     () => localStorage.getItem("homeRosterText") || JM_BOYS_ROSTER_PRESET
   );
   const [awayRosterText, setAwayRosterText] = useState(() => localStorage.getItem("awayRosterText") || "");
-
-  // ✅ do NOT persist apiUrl anymore (prevents device drift / bad cached URL)
-  // useEffect(() => localStorage.setItem("apiUrl", apiUrl), [apiUrl]);
 
   useEffect(() => localStorage.setItem("token", token), [token]);
   useEffect(() => localStorage.setItem("homeTeam", homeTeam), [homeTeam]);
@@ -261,7 +268,7 @@ export default function App() {
   // ✅ JSONP list_games
   async function loadPreviousGames() {
     if (!apiUrl || !token) {
-      setGamesError("Set API URL + token first.");
+      setGamesError("Set token first.");
       return;
     }
 
@@ -280,8 +287,6 @@ export default function App() {
       }
 
       setGames(Array.isArray(data.games) ? data.games : []);
-
-      // ✅ we still persist token; URL is hardcoded
       localStorage.setItem("token", token);
     } catch (err) {
       setGamesError(String(err?.message || err));
@@ -332,7 +337,7 @@ export default function App() {
   // ✅ JSONP get_game_state
   async function resumeGame(gameIdToResume, archiveTabFromRow = "") {
     if (!apiUrl || !token) {
-      setStatus("Set API URL + token.");
+      setStatus("Set token.");
       return;
     }
     setStatus("Loading game…");
@@ -408,7 +413,7 @@ export default function App() {
 
   async function startGame() {
     if (!apiUrl || !token) {
-      setStatus("Set API URL + token.");
+      setStatus("Set token.");
       return;
     }
     if (homeRoster.length < 5 || awayRoster.length < 5) {
@@ -439,8 +444,6 @@ export default function App() {
 
     try {
       await postNoCors(apiUrl, payload);
-
-      // ✅ URL is hardcoded; we only persist token
       localStorage.setItem("token", token);
 
       setStatus("Game initialized. Select starters…");
@@ -452,7 +455,7 @@ export default function App() {
 
   async function publishStat(playerId, eventType, delta = 1) {
     if (!apiUrl || !token) {
-      setStatus("Set API URL + token.");
+      setStatus("Set token.");
       return;
     }
     const payload = {
@@ -494,7 +497,7 @@ export default function App() {
 
   async function publishSub(teamName, outId, inId) {
     if (!apiUrl || !token) {
-      setStatus("Set API URL + token.");
+      setStatus("Set token.");
       return;
     }
     const payload = {
@@ -541,7 +544,7 @@ export default function App() {
 
   async function endGame(resetLive = false) {
     if (!apiUrl || !token) {
-      setStatus("Set API URL + token.");
+      setStatus("Set token.");
       return;
     }
 
@@ -628,7 +631,6 @@ export default function App() {
         <h2 style={{ margin: "8px 0" }}>JM Live Stats — Setup</h2>
 
         <div style={card}>
-          {/* ✅ show the hardcoded URL (read-only) */}
           <label>
             Apps Script URL (hardcoded)
             <input value={apiUrl} readOnly style={{ width: "100%", padding: 8, opacity: 0.85 }} />
@@ -647,11 +649,19 @@ export default function App() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <label>
               Team 1 (James Monroe)
-              <input value={homeTeam} onChange={(e) => setHomeTeam(e.target.value)} style={{ width: "100%", padding: 8 }} />
+              <input
+                value={homeTeam}
+                onChange={(e) => setHomeTeam(e.target.value)}
+                style={{ width: "100%", padding: 8 }}
+              />
             </label>
             <label>
               Team 2 (Opponent)
-              <input value={awayTeam} onChange={(e) => setAwayTeam(e.target.value)} style={{ width: "100%", padding: 8 }} />
+              <input
+                value={awayTeam}
+                onChange={(e) => setAwayTeam(e.target.value)}
+                style={{ width: "100%", padding: 8 }}
+              />
             </label>
           </div>
         </div>
@@ -681,15 +691,28 @@ export default function App() {
             </button>
           </div>
 
-          <textarea value={homeRosterText} onChange={(e) => setHomeRosterText(e.target.value)} rows={8} style={{ width: "100%", padding: 8 }} />
+          <textarea
+            value={homeRosterText}
+            onChange={(e) => setHomeRosterText(e.target.value)}
+            rows={8}
+            style={{ width: "100%", padding: 8 }}
+          />
         </div>
 
         <div style={card}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 2 Roster (one per line: “# Name”)</div>
-          <textarea value={awayRosterText} onChange={(e) => setAwayRosterText(e.target.value)} rows={8} style={{ width: "100%", padding: 8 }} />
+          <textarea
+            value={awayRosterText}
+            onChange={(e) => setAwayRosterText(e.target.value)}
+            rows={8}
+            style={{ width: "100%", padding: 8 }}
+          />
         </div>
 
-        <button onClick={startGame} style={{ width: "100%", marginTop: 12, padding: 14, fontWeight: 900, borderRadius: 12 }}>
+        <button
+          onClick={startGame}
+          style={{ width: "100%", marginTop: 12, padding: 14, fontWeight: 900, borderRadius: 12 }}
+        >
           START GAME (writes LIVE + clears logs)
         </button>
 
@@ -810,7 +833,10 @@ export default function App() {
           SAVE STARTERS + START GAME UI
         </button>
 
-        <button onClick={() => setScreen("setup")} style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 12 }}>
+        <button
+          onClick={() => setScreen("setup")}
+          style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 12 }}
+        >
           Back to Setup
         </button>
 
@@ -846,7 +872,10 @@ export default function App() {
 
         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
           {games.map((g, idx) => (
-            <div key={`${idx}-${g.game_id}-${g.archive_tab || ""}-${g.archived_at_iso || ""}`} style={{ padding: 12, border: "1px solid #ddd", borderRadius: 12 }}>
+            <div
+              key={`${idx}-${g.game_id}-${g.archive_tab || ""}-${g.archived_at_iso || ""}`}
+              style={{ padding: 12, border: "1px solid #ddd", borderRadius: 12 }}
+            >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 900 }}>
                   {g.date_iso ? `${String(g.date_iso).slice(0, 10)} — ` : ""}
@@ -859,7 +888,10 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                <button onClick={() => resumeGame(g.game_id, g.archive_tab)} style={{ padding: "10px 12px", borderRadius: 12, fontWeight: 900 }}>
+                <button
+                  onClick={() => resumeGame(g.game_id, g.archive_tab)}
+                  style={{ padding: "10px 12px", borderRadius: 12, fontWeight: 900 }}
+                >
                   Resume
                 </button>
 
@@ -1120,4 +1152,3 @@ export default function App() {
     </div>
   );
 }
-
