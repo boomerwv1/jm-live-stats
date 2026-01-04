@@ -359,7 +359,7 @@ export default function App() {
     } catch {
       setStatus("Init failed. Check endpoint/token.");
     }
-
+  } // ✅ CLOSE startGame()
   async function publishStat(playerId, eventType, delta = 1) {
     if (!apiUrl || !token) {
       setStatus("Set API URL + token.");
