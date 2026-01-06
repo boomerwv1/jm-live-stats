@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ✅ SINGLE SOURCE OF TRUTH for the GAS Web App URL (change this ONE line on new deployments)
 const ENDPOINT_DEFAULT =
-  "https://script.google.com/macros/s/AKfycbylXaA_x1Uw5NNYYJV106qkraj-dq9gBZs8s_Ly1nP80Vtb6wuVSsWcWW8JujL3vyNYAA/exec";
+  "https://script.google.com/macros/s/AKfycbwTMV1A32GgCN7wZYkW3uGafUKHw9Kmy0Amlku5JhY8w3o6w0YYducCKwiHOHqmv0Gq9Q/exec";
+  
 
 // ✅ App always uses this URL (no localStorage, no user-edit, no drift)
 const API_URL = ENDPOINT_DEFAULT;
