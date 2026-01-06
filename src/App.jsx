@@ -143,12 +143,27 @@ function parseRoster(text, prefix) {
 
   const roster = [];
   for (const line of lines) {
+    // Expect: "23 John Smith" (last name may include spaces like "Van Buren" -> we’ll keep everything after first as name)
     const m = line.match(/^(\d+)\s+(.+)$/);
     if (!m) continue;
+
     const jersey = m[1];
-    const name = m[2].trim();
+    const fullName = m[2].trim();
+
+    // Split first + last (best effort)
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    const first = parts[0] || "";
+    const last = parts.slice(1).join(" ") || ""; // supports multi-part last names
+
     const player_id = `${prefix}${jersey}`;
-    roster.push({ player_id, jersey, name });
+
+    roster.push({
+      player_id,
+      jersey,
+      first,
+      last,
+      name: `${first} ${last}`.trim(), // keep name for UI
+    });
   }
   return roster;
 }
