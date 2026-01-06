@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ✅ SINGLE SOURCE OF TRUTH for the GAS Web App URL (change this ONE line on new deployments)
 const ENDPOINT_DEFAULT =
-  "https://script.google.com/macros/s/AKfycbwTMV1A32GgCN7wZYkW3uGafUKHw9Kmy0Amlku5JhY8w3o6w0YYducCKwiHOHqmv0Gq9Q/exec";
+  "https://script.google.com/macros/s/AKfycbwV1gKTvh7S8sELkUR4NvXyIu5zTL95ZS2ic1kaCoWe5DygE9kKu3B-V-eqT_NJ5TzEBQ/exec";
   
 
 // ✅ App always uses this URL (no localStorage, no user-edit, no drift)
@@ -27,28 +27,31 @@ const EVENTS = [
 const PERIODS = ["Q1", "Q2", "Q3", "Q4", "OT"];
 
 // ✅ JM presets (Team 1 / James Monroe)
-const JM_BOYS_ROSTER_PRESET = `3 Hines
-10 Taylor
-12 Miller
-13 Surface
-33 Mann
-20 Comer
-21 Gardinier
-22 Adkins
-23 Mann
-24 Parker
-25 Taylor
-30 Crislip`;
+const JM_BOYS_ROSTER_PRESET = `3 Kadyn Hines
+10 Lane Taylor
+12 Jayden Miller
+13 Bryer Surface
+33 Ryan Mann
+20 Ben Comer
+21 Bryce Gardinier
+22 Clark Adkins
+23 Wyatt Mann
+24 Brycen Parker
+25 Levi Taylor
+30 Holden Crislip
+0 Kolton Dowdy';
 
-const JM_GIRLS_ROSTER_PRESET = `0 Dunlap
-13 Dunlap
-5 Long
-10 Griffith
-11 Moore
-2 Street
-4 Hill
-12 Jackson
-30 Smith`;
+const JM_GIRLS_ROSTER_PRESET = `0 Mya Dunlap
+13 Lydia Dunlap
+5 Kendall Long
+10 Peighton Griffith
+11 Monaka Moore
+1 Chylin Eggleston 
+3 Aysha Carter
+4 Trinity Hill
+12 Rileigh Jackson
+14 Grayson Johnson
+30 Lizzy Smith`;
 
 function uuid() {
   return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random();
