@@ -39,7 +39,7 @@ const JM_BOYS_ROSTER_PRESET = `3 Kadyn Hines
 24 Brycen Parker
 25 Levi Taylor
 30 Holden Crislip
-0 Kolton Dowdy';
+0 Kolton Dowdy`;
 
 const JM_GIRLS_ROSTER_PRESET = `0 Mya Dunlap
 13 Lydia Dunlap
