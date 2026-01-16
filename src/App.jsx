@@ -229,6 +229,10 @@ export default function App() {
   const [localScore, setLocalScore] = useState({ home: 0, away: 0 }); // ✅ Local score for immediate updates
   const [pbp, setPbp] = useState([]);
   const [pbpSeq, setPbpSeq] = useState(-1);
+  
+  // ✅ Multi-user: Track if this user is the primary (game creator) or secondary (joined) user
+  // Primary user controls clock, secondary users see it but can't modify
+  const [isPrimaryUser, setIsPrimaryUser] = useState(false);
 
   const [team, setTeam] = useState(homeTeam);
   const [pendingEvent, setPendingEvent] = useState(null);
@@ -439,10 +443,13 @@ export default function App() {
       setSubIn("");
       setTeam(homeTeamActive);
       
+      // ✅ Mark as secondary user (joined, not creator) - no clock control
+      setIsPrimaryUser(false);
+      
       // Note: roster will need to be loaded manually or synced later
       // For now, user can enter rosters if needed
       
-      setStatus(`Joined active game: ${gameIdActive} — ${homeTeamActive} vs ${awayTeamActive}`);
+      setStatus(`Joined active game: ${gameIdActive} — ${homeTeamActive} vs ${awayTeamActive} (Read-only clock)`);
       setScreen("game");
     } catch (err) {
       setStatus(`Join failed: ${String(err.message || err)}`);
@@ -514,7 +521,10 @@ export default function App() {
       setLocalScore({ home: 0, away: 0 });
       setScore({ home: 0, away: 0 });
       
-      setStatus(`Resumed ${g.game_id} @ ${g.period} ${fmtClock(g.clock_sec)}`);
+      // ✅ Mark as secondary user (resumed, not creator) - no clock control
+      setIsPrimaryUser(false);
+      
+      setStatus(`Resumed ${g.game_id} @ ${g.period} ${fmtClock(g.clock_sec)} (Read-only clock)`);
       setScreen("game");
     } catch (err) {
       setStatus(`Resume failed: ${String(err.message || err)}`);
@@ -551,6 +561,9 @@ export default function App() {
     initPlaytimeZeros();
     setLocalScore({ home: 0, away: 0 });
     setScore({ home: 0, away: 0 });
+    
+    // ✅ Mark as primary user (game creator) - full clock control
+    setIsPrimaryUser(true);
 
     const payload = {
       access_token: token,
@@ -792,10 +805,21 @@ export default function App() {
           });
         }
 
-        // Only override local clock/period when NOT running locally (avoids fighting the active timer)
-        if (!running) {
+        // ✅ Clock sync rules:
+        // - Primary user (creator): Only sync when clock is NOT running locally (avoids fighting the active timer)
+        // - Secondary user (joined): Always sync from backend (read-only, they don't control clock)
+        if (isPrimaryUser) {
+          // Primary user: only sync when clock is stopped
+          if (!running) {
+            if (meta.period) setPeriod(String(meta.period));
+            if (Number.isFinite(meta.clock_sec)) setClockSec(Number(meta.clock_sec));
+          }
+        } else {
+          // Secondary user: always sync from backend (read-only)
           if (meta.period) setPeriod(String(meta.period));
           if (Number.isFinite(meta.clock_sec)) setClockSec(Number(meta.clock_sec));
+          // Also sync running state (if backend has it running, stop it locally - only primary controls it)
+          setRunning(false);
         }
 
         // Sync playtime maps (so all users see consistent minutes)
@@ -1258,6 +1282,7 @@ export default function App() {
           <select
             value={period}
             onChange={async (e) => {
+              if (!isPrimaryUser) return; // ✅ Secondary users can't change period
               const nextPeriod = e.target.value;
               // ✅ Quarter change resets clock to 8:00 (still manually adjustable after reset)
               setPeriod(nextPeriod);
@@ -1265,7 +1290,9 @@ export default function App() {
               setRunning(false);
               await publishMetaWithAudit({ period: nextPeriod, clock_sec: 8 * 60 }, "quarter_change_reset");
             }}
-            style={{ padding: 8 }}
+            disabled={!isPrimaryUser}
+            style={{ padding: 8, opacity: isPrimaryUser ? 1 : 0.5 }}
+            title={!isPrimaryUser ? "Clock controlled by primary stat keeper" : ""}
           >
             {PERIODS.map((p) => (
               <option key={p} value={p}>
@@ -1274,46 +1301,72 @@ export default function App() {
             ))}
           </select>
 
-          <div style={{ fontSize: 32, fontWeight: 800 }}>{fmtClock(clockSec)}</div>
+          <div style={{ fontSize: 32, fontWeight: 800 }}>
+            {fmtClock(clockSec)}
+            {!isPrimaryUser && (
+              <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 8, color: "#666" }}>(Read-only)</span>
+            )}
+          </div>
 
           <div style={{ display: "flex", gap: 6 }}>
             <button 
-              onClick={() => setRunning((r) => !r)} 
+              onClick={() => {
+                if (!isPrimaryUser) return;
+                setRunning((r) => !r);
+              }}
+              disabled={!isPrimaryUser}
               style={{ 
                 padding: "10px 12px", 
                 fontWeight: 900,
-                backgroundColor: running ? "#dc3545" : "#28a745",
+                backgroundColor: isPrimaryUser ? (running ? "#dc3545" : "#28a745") : "#ccc",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,
                 fontSize: 14,
+                opacity: isPrimaryUser ? 1 : 0.5,
+                cursor: isPrimaryUser ? "pointer" : "not-allowed",
               }}
+              title={!isPrimaryUser ? "Clock controlled by primary stat keeper" : ""}
             >
               {running ? "STOP" : "START"}
             </button>
             <button 
-              onClick={() => setClockSec((s) => Math.max(0, s + 1))} 
+              onClick={() => {
+                if (!isPrimaryUser) return;
+                setClockSec((s) => Math.max(0, s + 1));
+              }}
+              disabled={!isPrimaryUser}
               style={{ 
                 padding: "10px 12px",
-                backgroundColor: "#f8f9fa",
-                border: "2px solid #666",
+                backgroundColor: isPrimaryUser ? "#f8f9fa" : "#e9ecef",
+                border: `2px solid ${isPrimaryUser ? "#666" : "#ccc"}`,
                 borderRadius: 8,
                 fontWeight: 700,
                 fontSize: 14,
+                opacity: isPrimaryUser ? 1 : 0.5,
+                cursor: isPrimaryUser ? "pointer" : "not-allowed",
               }}
+              title={!isPrimaryUser ? "Clock controlled by primary stat keeper" : ""}
             >
               +1
             </button>
             <button 
-              onClick={() => setClockSec((s) => Math.max(0, s - 1))} 
+              onClick={() => {
+                if (!isPrimaryUser) return;
+                setClockSec((s) => Math.max(0, s - 1));
+              }}
+              disabled={!isPrimaryUser}
               style={{ 
                 padding: "10px 12px",
-                backgroundColor: "#f8f9fa",
-                border: "2px solid #666",
+                backgroundColor: isPrimaryUser ? "#f8f9fa" : "#e9ecef",
+                border: `2px solid ${isPrimaryUser ? "#666" : "#ccc"}`,
                 borderRadius: 8,
                 fontWeight: 700,
                 fontSize: 14,
+                opacity: isPrimaryUser ? 1 : 0.5,
+                cursor: isPrimaryUser ? "pointer" : "not-allowed",
               }}
+              title={!isPrimaryUser ? "Clock controlled by primary stat keeper" : ""}
             >
               -1
             </button>
@@ -1321,38 +1374,43 @@ export default function App() {
         </div>
 
         {/* ✅ Manual clock correction (audited + multi-user propagates via polling) */}
+        {/* Only show clock controls to primary user */}
+        {isPrimaryUser && (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              value={clockEdit}
+              onChange={(e) => setClockEdit(e.target.value)}
+              placeholder="Set clock (MM:SS) e.g. 07:32"
+              style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", width: 220 }}
+            />
+            <button
+              onClick={async () => {
+                const sec = parseClockInputToSec(clockEdit);
+                if (sec == null) {
+                  setStatus("Clock format must be MM:SS (seconds 00-59).");
+                  return;
+                }
+                setClockSec(sec);
+                setRunning(false);
+                await publishMetaWithAudit({ clock_sec: sec }, "manual_clock_edit");
+                setStatus(`Clock set to ${fmtClock(sec)}`);
+                setClockEdit("");
+              }}
+              style={{ 
+                padding: "10px 12px", 
+                fontWeight: 900,
+                backgroundColor: "#0066cc",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 14,
+              }}
+            >
+              SET CLOCK
+            </button>
+          </div>
+        )}
         <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            value={clockEdit}
-            onChange={(e) => setClockEdit(e.target.value)}
-            placeholder="Set clock (MM:SS) e.g. 07:32"
-            style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", width: 220 }}
-          />
-          <button
-            onClick={async () => {
-              const sec = parseClockInputToSec(clockEdit);
-              if (sec == null) {
-                setStatus("Clock format must be MM:SS (seconds 00-59).");
-                return;
-              }
-              setClockSec(sec);
-              setRunning(false);
-              await publishMetaWithAudit({ clock_sec: sec }, "manual_clock_edit");
-              setStatus(`Clock set to ${fmtClock(sec)}`);
-              setClockEdit("");
-            }}
-            style={{ 
-              padding: "10px 12px", 
-              fontWeight: 900,
-              backgroundColor: "#0066cc",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              fontSize: 14,
-            }}
-          >
-            SET CLOCK
-          </button>
           <button
             onClick={publishJumpBall}
             style={{ 
