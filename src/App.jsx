@@ -222,8 +222,12 @@ export default function App() {
   const [period, setPeriod] = useState("Q1");
   const [clockSec, setClockSec] = useState(8 * 60);
   const [running, setRunning] = useState(false);
+  const [clockEdit, setClockEdit] = useState(""); // MM:SS
 
   const [status, setStatus] = useState("");
+  const [score, setScore] = useState({ home: 0, away: 0 });
+  const [pbp, setPbp] = useState([]);
+  const [pbpSeq, setPbpSeq] = useState(-1);
 
   const [team, setTeam] = useState(homeTeam);
   const [pendingEvent, setPendingEvent] = useState(null);
@@ -247,8 +251,7 @@ export default function App() {
   const [homePT, setHomePT] = useState({});
   const [awayPT, setAwayPT] = useState({});
 
-  // SUB mode
-  const [subMode, setSubMode] = useState(false);
+  // Substitution state (no separate mode - integrated into main view)
   const [subOut, setSubOut] = useState("");
   const [subIn, setSubIn] = useState("");
 
@@ -407,7 +410,8 @@ export default function App() {
 
       setRunning(false);
       setPendingEvent(null);
-      setSubMode(false);
+      setSubOut("");
+      setSubIn("");
       setTeam(g.home_team || homeTeam);
 
       const tab = (archiveTabFromRow || g.archive_tab || "").trim();
@@ -514,6 +518,25 @@ export default function App() {
     } catch {}
   }
 
+  async function publishMetaWithAudit(next, reason) {
+    if (!apiUrl || !token) return;
+    const payload = {
+      access_token: token,
+      action: "set_meta",
+      meta_event_id: uuid(),
+      ts_iso: new Date().toISOString(),
+      reason: String(reason || ""),
+      game_id: gameId,
+      home_team: homeTeam,
+      away_team: awayTeam,
+      period: next.period ?? period,
+      clock_sec: next.clock_sec ?? clockSec,
+    };
+    try {
+      await postNoCors(apiUrl, payload);
+    } catch {}
+  }
+
   async function publishSub(teamName, outId, inId) {
     if (!apiUrl || !token) {
       setStatus("Set token.");
@@ -539,6 +562,32 @@ export default function App() {
     }
   }
 
+  async function publishJumpBall() {
+    if (!apiUrl || !token) {
+      setStatus("Set token.");
+      return;
+    }
+    const payload = {
+      access_token: token,
+      action: "stat",
+      event_id: uuid(),
+      ts_iso: new Date().toISOString(),
+      game_id: gameId,
+      period,
+      clock_sec: clockSec,
+      team: team,
+      player_id: "", // jump ball is not player-specific
+      event_type: "JUMP_BALL",
+      delta: 0,
+    };
+    try {
+      await postNoCors(apiUrl, payload);
+      setStatus(`Logged JUMP BALL @ ${period} ${fmtClock(clockSec)}`);
+    } catch {
+      setStatus("Publish failed (network?).");
+    }
+  }
+
   function applySubLocally(teamName, outId, inId) {
     if (teamName === homeTeam) {
       const cur = new Set(homeOn);
@@ -560,6 +609,87 @@ export default function App() {
     }
     return false;
   }
+
+  function parseClockInputToSec(s) {
+    const raw = String(s || "").trim();
+    const m = raw.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+    if (!m) return null;
+    const mm = Number(m[1]);
+    const ss = Number(m[2]);
+    if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null;
+    if (ss < 0 || ss > 59) return null;
+    return mm * 60 + ss;
+  }
+
+  // ✅ Multi-user polling: pull authoritative LIVE meta/score/lineups/playtime/PBP
+  useEffect(() => {
+    if (screen !== "game") return;
+    if (!apiUrl || !token) return;
+
+    let stopped = false;
+    const pollMs = 1200;
+
+    async function poll() {
+      if (stopped) return;
+      try {
+        const url = apiUrlFor(apiUrl, {
+          action: "get_live_snapshot",
+          access_token: token,
+          since_pbp_seq: pbpSeq,
+        });
+        const data = await jsonp(url, { timeoutMs: 8000 });
+        if (!data || !data.ok) return;
+
+        const live = data.live || {};
+        const meta = live.meta || {};
+
+        // Score sanity check display (authoritative from backend totals)
+        if (live.score) {
+          setScore({
+            home: Number(live.score.home_pts || 0),
+            away: Number(live.score.away_pts || 0),
+          });
+        }
+
+        // Only override local clock/period when NOT running locally (avoids fighting the active timer)
+        if (!running) {
+          if (meta.period) setPeriod(String(meta.period));
+          if (Number.isFinite(meta.clock_sec)) setClockSec(Number(meta.clock_sec));
+        }
+
+        // Sync playtime maps (so all users see consistent minutes)
+        if (live.playtime_home && typeof live.playtime_home === "object") setHomePT(live.playtime_home);
+        if (live.playtime_away && typeof live.playtime_away === "object") setAwayPT(live.playtime_away);
+
+        // Sync on-floor lineup derived from starters + subs (multi-user safe)
+        if (Array.isArray(live.on_floor_home) && live.on_floor_home.length === 5) setHomeOn(live.on_floor_home);
+        if (Array.isArray(live.on_floor_away) && live.on_floor_away.length === 5) setAwayOn(live.on_floor_away);
+
+        // Append new PBP rows
+        if (data.pbp && Array.isArray(data.pbp.rows)) {
+          const rows = data.pbp.rows;
+          if (rows.length) {
+            setPbp((prev) => {
+              const next = [...prev, ...rows];
+              // keep last ~120 lines
+              return next.length > 120 ? next.slice(next.length - 120) : next;
+            });
+          }
+          if (Number.isFinite(data.pbp.latest_seq)) setPbpSeq(data.pbp.latest_seq);
+        }
+      } catch {
+        // silent
+      } finally {
+        if (!stopped) setTimeout(poll, pollMs);
+      }
+    }
+
+    poll();
+    return () => {
+      stopped = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, apiUrl, token, pbpSeq, running]);
 
   async function endGame(resetLive = false) {
     if (!apiUrl || !token) {
@@ -946,12 +1076,23 @@ export default function App() {
   const startersTextAway = awayOnPlayers.map((p) => `#${p.jersey}`).join(", ");
 
   return (
-    <div style={{ fontFamily: "system-ui", padding: 12, maxWidth: 560, margin: "0 auto" }}>
+    <div style={{ fontFamily: "system-ui", padding: 12, maxWidth: 720, margin: "0 auto" }}>
       <h2 style={{ margin: "8px 0" }}>JM Live Stats</h2>
 
       <div style={card}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-          <select value={period} onChange={(e) => setPeriod(e.target.value)} style={{ padding: 8 }}>
+          <select
+            value={period}
+            onChange={async (e) => {
+              const nextPeriod = e.target.value;
+              // ✅ Quarter change resets clock to 8:00 (still manually adjustable after reset)
+              setPeriod(nextPeriod);
+              setClockSec(8 * 60);
+              setRunning(false);
+              await publishMetaWithAudit({ period: nextPeriod, clock_sec: 8 * 60 }, "quarter_change_reset");
+            }}
+            style={{ padding: 8 }}
+          >
             {PERIODS.map((p) => (
               <option key={p} value={p}>
                 {p}
@@ -973,6 +1114,44 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* ✅ Manual clock correction (audited + multi-user propagates via polling) */}
+        <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={clockEdit}
+            onChange={(e) => setClockEdit(e.target.value)}
+            placeholder="Set clock (MM:SS) e.g. 07:32"
+            style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", width: 220 }}
+          />
+          <button
+            onClick={async () => {
+              const sec = parseClockInputToSec(clockEdit);
+              if (sec == null) {
+                setStatus("Clock format must be MM:SS (seconds 00-59).");
+                return;
+              }
+              setClockSec(sec);
+              setRunning(false);
+              await publishMetaWithAudit({ clock_sec: sec }, "manual_clock_edit");
+              setStatus(`Clock set to ${fmtClock(sec)}`);
+              setClockEdit("");
+            }}
+            style={{ padding: "10px 12px", fontWeight: 900 }}
+          >
+            SET CLOCK
+          </button>
+          <button
+            onClick={publishJumpBall}
+            style={{ padding: "10px 12px", fontWeight: 900 }}
+            title="Logs an event (no stat delta) for auditing/resume"
+          >
+            JUMP BALL
+          </button>
+          <div style={{ marginLeft: "auto", fontWeight: 900 }}>
+            {/* ✅ Live score sanity check (from backend totals) */}
+            {homeTeam}: {score.home} &nbsp;|&nbsp; {awayTeam}: {score.away}
+          </div>
+        </div>
       </div>
 
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
@@ -985,61 +1164,101 @@ export default function App() {
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-        <button onClick={() => setTeam(homeTeam)} style={{ flex: 1, padding: 10, fontWeight: team === homeTeam ? 900 : 700 }}>
+        <button
+          onClick={() => {
+            setTeam(homeTeam);
+            setSubOut("");
+            setSubIn("");
+            setPendingEvent(null);
+          }}
+          style={{ flex: 1, padding: 10, fontWeight: team === homeTeam ? 900 : 700 }}
+        >
           {homeTeam}
-        </button>
-        <button onClick={() => setTeam(awayTeam)} style={{ flex: 1, padding: 10, fontWeight: team === awayTeam ? 900 : 700 }}>
-          {awayTeam}
         </button>
         <button
           onClick={() => {
-            setSubMode((s) => !s);
+            setTeam(awayTeam);
+            setSubOut("");
+            setSubIn("");
             setPendingEvent(null);
           }}
-          style={{ flex: 1, padding: 10, fontWeight: subMode ? 900 : 700 }}
+          style={{ flex: 1, padding: 10, fontWeight: team === awayTeam ? 900 : 700 }}
         >
-          {subMode ? "STATS" : "SUB"}
+          {awayTeam}
         </button>
       </div>
 
-      {!subMode && (
-        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-          {EVENTS.map(([code, label]) => (
-            <button
-              key={code}
-              onClick={() => setPendingEvent(code)}
-              style={{
-                padding: 12,
-                borderRadius: 12,
-                border: pendingEvent === code ? "2px solid #000" : "1px solid #ddd",
-                fontWeight: 900,
-              }}
-            >
-              {label}
-            </button>
-          ))}
+      {/* Event buttons */}
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        {EVENTS.map(([code, label]) => (
+          <button
+            key={code}
+            onClick={() => {
+              setPendingEvent(code);
+              setSubOut(""); // Clear sub selection when selecting event
+              setSubIn("");
+            }}
+            style={{
+              padding: 12,
+              borderRadius: 12,
+              border: pendingEvent === code ? "2px solid #000" : "1px solid #ddd",
+              fontWeight: 900,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Unified player view: ALL players on one screen */}
+      <div style={card}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>
+          {pendingEvent ? (
+            <>Select player ({team}) — {pendingEvent}</>
+          ) : subOut || subIn ? (
+            <>SUB ({team}): {subOut ? `OUT: #${(isHomeSelected ? homeRoster : awayRoster).find((p) => p.player_id === subOut)?.jersey || subOut}` : ""} {subIn ? `IN: #${(isHomeSelected ? homeRoster : awayRoster).find((p) => p.player_id === subIn)?.jersey || subIn}` : ""}</>
+          ) : (
+            <>Select player ({team}) — tap an event for stats, or tap players for sub</>
+          )}
         </div>
-      )}
 
-      {!subMode && (
-        <div style={card}>
-          <div style={{ fontWeight: 900, marginBottom: 8 }}>
-            Select player ({team}) {pendingEvent ? `— ${pendingEvent}` : "(tap an event)"}
+        {/* ON-COURT PLAYERS (pinned to top, visually distinct) */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#0066cc" }}>
+            ON COURT ({onFloorPlayers.length}/5)
           </div>
-
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
             {onFloorPlayers.map((p) => {
               const sec = isHomeSelected ? homePT[p.player_id] : awayPT[p.player_id];
+              const isSelectedForSub = subOut === p.player_id;
+              
               return (
                 <button
                   key={p.player_id}
-                  disabled={!pendingEvent}
                   onClick={() => {
-                    publishStat(p.player_id, pendingEvent, 1);
-                    setPendingEvent(null);
+                    if (pendingEvent) {
+                      // Stat entry mode: log the stat
+                      publishStat(p.player_id, pendingEvent, 1);
+                      setPendingEvent(null);
+                    } else {
+                      // Sub mode: select this player to come OUT
+                      if (subOut === p.player_id) {
+                        setSubOut(""); // Deselect
+                      } else {
+                        setSubOut(p.player_id);
+                        setSubIn(""); // Clear IN selection when changing OUT
+                      }
+                    }
                   }}
-                  style={{ padding: 12, borderRadius: 12, fontWeight: 900, opacity: pendingEvent ? 1 : 0.5 }}
-                  title={`Minutes: ${fmtMinutesFromSec(sec || 0)}`}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    fontWeight: 900,
+                    backgroundColor: isSelectedForSub ? "#fff3cd" : "#e7f3ff",
+                    border: isSelectedForSub ? "3px solid #ff8800" : pendingEvent ? "2px solid #0066cc" : "1px solid #0066cc",
+                    cursor: "pointer",
+                  }}
+                  title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                 >
                   #{p.jersey}
                 </button>
@@ -1047,60 +1266,56 @@ export default function App() {
             })}
           </div>
         </div>
-      )}
 
-      {subMode && (
-        <div style={card}>
-          <div style={{ fontWeight: 900, marginBottom: 8 }}>SUB ({team})</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>OUT (on floor)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-                {(isHomeSelected ? homeOnPlayers : awayOnPlayers).map((p) => (
-                  <button
-                    key={p.player_id}
-                    onClick={() => setSubOut(p.player_id)}
-                    style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      fontWeight: 900,
-                      border: subOut === p.player_id ? "2px solid #000" : "1px solid #ddd",
-                    }}
-                  >
-                    #{p.jersey}
-                  </button>
-                ))}
-              </div>
+        {/* BENCH PLAYERS (below on-court, always visible) */}
+        {benchPlayers.length > 0 && (
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#666" }}>
+              BENCH ({benchPlayers.length})
             </div>
-
-            <div>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>IN (bench)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                {benchPlayers.map((p) => (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+              {benchPlayers.map((p) => {
+                const sec = isHomeSelected ? homePT[p.player_id] : awayPT[p.player_id];
+                const isSelectedForSub = subIn === p.player_id;
+                
+                return (
                   <button
                     key={p.player_id}
-                    onClick={() => setSubIn(p.player_id)}
+                    onClick={() => {
+                      if (pendingEvent) {
+                        // In stat mode, ignore bench clicks (only on-court players can have stats)
+                        return;
+                      }
+                      // Sub mode: select this player to come IN
+                      if (subIn === p.player_id) {
+                        setSubIn(""); // Deselect
+                      } else {
+                        setSubIn(p.player_id);
+                      }
+                    }}
                     style={{
                       padding: 12,
                       borderRadius: 12,
                       fontWeight: 900,
-                      border: subIn === p.player_id ? "2px solid #000" : "1px solid #ddd",
+                      backgroundColor: isSelectedForSub ? "#d4edda" : "#f8f9fa",
+                      border: isSelectedForSub ? "3px solid #28a745" : "1px solid #ddd",
+                      opacity: pendingEvent ? 0.4 : 1,
+                      cursor: pendingEvent ? "not-allowed" : "pointer",
                     }}
+                    title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                   >
                     #{p.jersey}
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
           </div>
+        )}
 
+        {/* SUB button (only shown when both OUT and IN are selected) */}
+        {!pendingEvent && subOut && subIn && (
           <button
             onClick={async () => {
-              if (!subOut || !subIn) {
-                setStatus("Pick OUT and IN.");
-                return;
-              }
               const ok = applySubLocally(team, subOut, subIn);
               if (!ok) {
                 setStatus("Illegal sub (lineup state).");
@@ -1113,13 +1328,23 @@ export default function App() {
 
               setSubOut("");
               setSubIn("");
+              setStatus(`SUB ${team}: ${subOut} → ${subIn} @ ${period} ${fmtClock(clockSec)}`);
             }}
-            style={{ marginTop: 10, width: "100%", padding: 12, borderRadius: 12, fontWeight: 950 }}
+            style={{
+              marginTop: 12,
+              width: "100%",
+              padding: 14,
+              borderRadius: 12,
+              fontWeight: 950,
+              backgroundColor: "#28a745",
+              color: "white",
+              border: "none",
+            }}
           >
-            SAVE SUB
+            SUB: #{onFloorPlayers.find((p) => p.player_id === subOut)?.jersey || subOut} → #{benchPlayers.find((p) => p.player_id === subIn)?.jersey || subIn}
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <button
         onClick={() => {
@@ -1135,11 +1360,20 @@ export default function App() {
       </button>
 
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-        <button onClick={() => endGame(false)} style={{ flex: 1, padding: 12, borderRadius: 12, fontWeight: 950 }}>
+        <button
+          onClick={() => {
+            // ✅ Confirm dialog before ending a game (never auto-end)
+            if (!confirm("End game and archive? This cannot be undone.")) return;
+            endGame(false);
+          }}
+          style={{ flex: 1, padding: 12, borderRadius: 12, fontWeight: 950 }}
+        >
           END GAME (archive)
         </button>
         <button
           onClick={() => {
+            // ✅ Confirm dialog before ending + resetting LIVE
+            if (!confirm("End game, archive, AND reset LIVE? This will clear the LIVE view for the next game.")) return;
             endGame(true);
             setScreen("setup");
           }}
@@ -1152,6 +1386,27 @@ export default function App() {
       <div style={{ marginTop: 12, padding: 10, border: "1px solid #eee", borderRadius: 12, minHeight: 44 }}>
         <div style={{ fontWeight: 800 }}>Status:</div>
         <div style={{ fontSize: 13 }}>{status || "Ready."}</div>
+      </div>
+
+      {/* Optional: lightweight play-by-play (last ~120) */}
+      <div style={{ marginTop: 12, padding: 10, border: "1px solid #eee", borderRadius: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 6 }}>Play-by-Play (live)</div>
+        <div style={{ fontSize: 12, maxHeight: 220, overflow: "auto", textAlign: "left" }}>
+          {pbp.length ? (
+            pbp
+              .slice()
+              .reverse()
+              .map((r) => (
+                <div key={r.seq} style={{ padding: "2px 0", borderBottom: "1px dashed #eee" }}>
+                  <span style={{ opacity: 0.75 }}>{r.period} {String(r.clock_display || "").replace(/^'/, "")} </span>
+                  <b>{r.team ? `${r.team}: ` : ""}</b>
+                  {r.text}
+                </div>
+              ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>No events yet.</div>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

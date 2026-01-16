@@ -1,0 +1,18 @@
+{
+  "name": "jm-broadcast-scripts",
+  "version": "1.0.0",
+  "description": "Node.js bridge scripts for JM Live Stats - polls CSV and serves player images",
+  "main": "jm_players_server.js",
+  "scripts": {
+    "start": "node run_broadcast_stack.js",
+    "bridge": "node jm_titler_bridge.js",
+    "server": "node jm_players_server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

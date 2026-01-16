@@ -1,0 +1,197 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top" />
+  <meta charset="utf-8" />
+  <title>JM Live Stats</title>
+  <style>
+    body { font-family: system-ui, Arial; padding: 16px; max-width: 900px; margin: 0 auto; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; font-weight: 800; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    input { padding: 10px; border-radius: 10px; border: 1px solid #ddd; width: 100%; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 12px; }
+    .muted { opacity: .75; }
+    .err { border: 1px solid #f99; background: #fff5f5; }
+    code { background: #f5f5f5; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h2>JM Live Stats</h2>
+
+  <div class="card">
+    <div class="muted">Token is required for the API endpoints.</div>
+    <label>Access Token</label>
+    <input id="token" placeholder="paste token" />
+    <div class="row" style="margin-top:10px;">
+      <button onclick="listGames()">Previous Games</button>
+    </div>
+  </div>
+
+  <div id="out" class="card" style="display:none;"></div>
+
+  <script>
+    function baseExec() {
+      // Works for /exec webapp URLs; strips querystring.
+      return location.href.split('?')[0];
+    }
+
+    function secToClock(sec) {
+      sec = Math.max(0, Math.floor(Number(sec) || 0));
+      const mm = String(Math.floor(sec/60)).padStart(2,'0');
+      const ss = String(sec%60).padStart(2,'0');
+      return mm + ':' + ss;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+    }
+
+    function escapeJs(s){
+      return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    }
+
+    // ✅ JSONP helper (no CORS issues)
+    function jsonp(url) {
+      return new Promise((resolve, reject) => {
+        const cb = "cb_" + Math.random().toString(36).slice(2);
+        const sep = url.includes("?") ? "&" : "?";
+        const full = url + sep + "callback=" + cb;
+
+        const script = document.createElement("script");
+        script.async = true;
+        script.src = full;
+
+        window[cb] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("JSONP load error (script failed to load)"));
+        };
+
+        function cleanup() {
+          try { delete window[cb]; } catch(e) { window[cb] = undefined; }
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        }
+
+        document.body.appendChild(script);
+      });
+    }
+
+    function apiUrl(params) {
+      const u = new URL(baseExec());
+      u.searchParams.set("view", "api");
+      Object.entries(params).forEach(([k,v]) => u.searchParams.set(k, String(v)));
+      return u.toString();
+    }
+
+    async function listGames() {
+      const token = document.getElementById('token').value.trim();
+      const out = document.getElementById('out');
+      out.className = "card";
+      out.style.display = 'block';
+
+      if (!token) {
+        out.className = "card err";
+        out.innerHTML = "<b>Error:</b> Missing access token.";
+        return;
+      }
+
+      out.innerHTML = "Loading…";
+
+      try {
+        const url = apiUrl({ action: "list_games", access_token: token });
+        const data = await jsonp(url);
+
+        if (!data || !data.ok) {
+          out.className = "card err";
+          out.innerHTML = "<b>Error:</b> " + escapeHtml((data && data.error) ? data.error : "Unknown error");
+          return;
+        }
+
+        const games = Array.isArray(data.games) ? data.games : [];
+
+        out.innerHTML =
+          '<b>Previous Games</b>' +
+          '<div class="muted" style="margin:6px 0;">Resume shows last saved period/clock for that game_id. Generate Sheet opens PressSheet.</div>' +
+          (games.length ? games.map(renderGameCard).join('') : '<div class="muted">No games found.</div>');
+
+      } catch (err) {
+        out.className = "card err";
+        out.innerHTML = "<b>Error:</b> " + escapeHtml(String(err.message || err));
+      }
+    }
+
+    function renderGameCard(g) {
+      const clock = (typeof g.clock_sec === 'number' && isFinite(g.clock_sec)) ? secToClock(g.clock_sec) : '';
+      const tab = String(g.archive_tab || '').trim();
+      const title = `${g.date_iso ? g.date_iso + ' — ' : ''}${g.home_team} vs ${g.away_team}`;
+      const meta = `${g.status || ''}${g.period ? ' • ' + g.period : ''}${clock ? ' • ' + clock : ''}`;
+
+      const safeTitle = escapeHtml(title);
+      const safeMeta = escapeHtml(meta);
+
+      const resumeId = escapeJs(g.game_id);
+      const tabArg = escapeJs(tab);
+
+      const genDisabled = tab ? "" : "disabled";
+      const tabLine = tab
+        ? `<div class="muted" style="margin-top:8px;">Archive tab: <code>${escapeHtml(tab)}</code></div>`
+        : `<div class="muted" style="margin-top:8px;">No archive tab recorded (game not archived yet).</div>`;
+
+      return `
+        <div class="card">
+          <div class="row" style="justify-content:space-between;">
+            <div><b>${safeTitle}</b></div>
+            <div class="muted">${safeMeta}</div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <button onclick="resume('${resumeId}')">Resume</button>
+            <button ${genDisabled} onclick="generate('${tabArg}')">Generate Sheet</button>
+          </div>
+          ${tabLine}
+        </div>
+      `;
+    }
+
+    async function resume(gameId) {
+      const token = document.getElementById('token').value.trim();
+      if (!token) { alert("Missing token"); return; }
+
+      try {
+        const url = apiUrl({
+          action: "get_game_state",
+          game_id: gameId,
+          access_token: token
+        });
+
+        const data = await jsonp(url);
+        if (!data || !data.ok) {
+          alert((data && data.error) ? data.error : "resume failed");
+          return;
+        }
+
+        const g = data.game || {};
+        alert(`Resume: ${g.game_id}\n${g.home_team} vs ${g.away_team}\n${g.period} ${secToClock(g.clock_sec)}`);
+
+      } catch (err) {
+        alert(String(err.message || err));
+      }
+    }
+
+    function generate(archiveTab) {
+      const tab = String(archiveTab || "").trim();
+      if (!tab) { alert("No archive tab available for this game yet."); return; }
+      window.open(baseExec() + '?view=presssheet&tab=' + encodeURIComponent(tab), '_blank', 'noopener,noreferrer');
+    }
+  </script>
+</body>
+</html>

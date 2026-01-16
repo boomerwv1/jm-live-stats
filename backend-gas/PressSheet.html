@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Press Sheet</title>
+    <style>
+      body { font-family: Arial, Helvetica, sans-serif; padding: 18px; }
+      h1 { font-size: 18px; margin: 0 0 10px; }
+      .meta { margin: 10px 0 16px; }
+      .meta-row { display: flex; gap: 10px; margin: 4px 0; }
+      .meta-key { width: 110px; font-weight: 700; }
+      table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; }
+      th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; }
+      th { background: #f6f6f6; text-align: left; }
+      .section-title { font-weight: 800; margin-top: 16px; }
+      .small { font-size: 12px; opacity: 0.85; }
+      .starters { margin: 8px 0 12px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1><?= meta && meta.MATCHUP ? meta.MATCHUP : tabName ?></h1>
+
+    <div class="meta">
+      <? for (var k in meta) { ?>
+        <div class="meta-row">
+          <div class="meta-key"><?= k ?></div>
+          <div><?= meta[k] ?></div>
+        </div>
+      <? } ?>
+    </div>
+
+    <? 
+      function idxOf(h) { return statsHeaders.indexOf(h); }
+      function fmtMMSS(sec) {
+        var s = Math.max(0, Math.floor(Number(sec || 0)));
+        var mm = String(Math.floor(s / 60)).padStart(2, "0");
+        var ss = String(s % 60).padStart(2, "0");
+        return mm + ":" + ss;
+      }
+
+      var iTeam = idxOf("team");
+      var iJersey = idxOf("jersey");
+      var iName = idxOf("name");
+      var iStarter = idxOf("starter");
+      var iSec = idxOf("sec_played");
+
+      // Collect starters by team (from rows)
+      var startersByTeam = {};
+      if (iStarter !== -1 && iTeam !== -1) {
+        for (var r = 0; r < statsRows.length; r++) {
+          var row = statsRows[r];
+          var t = String(row[iTeam] || "");
+          var isStarter = !!row[iStarter];
+          if (!t || !isStarter) continue;
+
+          var label = "";
+          if (iJersey !== -1) label += "#" + String(row[iJersey] || "").trim();
+          if (iName !== -1) label += (label ? " " : "") + String(row[iName] || "").trim();
+
+          if (!startersByTeam[t]) startersByTeam[t] = [];
+          startersByTeam[t].push(label.trim());
+        }
+      }
+    ?>
+
+    <? if (Object.keys(startersByTeam).length) { ?>
+      <div class="starters">
+        <div class="section-title">Starters</div>
+        <? for (var t in startersByTeam) { ?>
+          <div class="small"><b><?= t ?>:</b> <?= startersByTeam[t].join(", ") ?></div>
+        <? } ?>
+      </div>
+    <? } ?>
+
+    <div class="section-title">Box Score</div>
+
+    <table>
+      <thead>
+        <tr>
+          <? for (var c = 0; c < statsHeaders.length; c++) { ?>
+            <th><?= statsHeaders[c] ?></th>
+          <? } ?>
+        </tr>
+      </thead>
+      <tbody>
+        <? for (var r = 0; r < statsRows.length; r++) { 
+          var row = statsRows[r];
+        ?>
+          <tr>
+            <? for (var c = 0; c < statsHeaders.length; c++) { 
+              var h = statsHeaders[c];
+              var v = row[c];
+
+              // pretty print sec_played as MM:SS
+              if (h === "sec_played") v = fmtMMSS(v);
+
+              // keep starter as TRUE/FALSE
+            ?>
+              <td><?= (v === null || v === undefined) ? "" : v ?></td>
+            <? } ?>
+          </tr>
+        <? } ?>
+      </tbody>
+    </table>
+
+    <? if (pbpHeaders && pbpHeaders.length) { ?>
+      <div class="section-title">Play by Play</div>
+
+      <table>
+        <thead>
+          <tr>
+            <? for (var c = 0; c < pbpHeaders.length; c++) { ?>
+              <th><?= pbpHeaders[c] ?></th>
+            <? } ?>
+          </tr>
+        </thead>
+        <tbody>
+          <? for (var r = 0; r < pbpRows.length; r++) { ?>
+            <tr>
+              <? for (var c = 0; c < pbpHeaders.length; c++) { ?>
+                <td><?= (pbpRows[r][c] === null || pbpRows[r][c] === undefined) ? "" : pbpRows[r][c] ?></td>
+              <? } ?>
+            </tr>
+          <? } ?>
+        </tbody>
+      </table>
+    <? } ?>
+  </body>
+</html>
+
