@@ -357,6 +357,42 @@ export default function App() {
     }
   }
 
+  // ✅ Join active game: check for current LIVE game and join it
+  async function joinCurrentGame() {
+    if (!apiUrl || !token) {
+      setStatus("Set token first.");
+      return;
+    }
+    setStatus("Checking for active game…");
+    try {
+      const url = apiUrlFor(apiUrl, {
+        action: "get_live_snapshot",
+        access_token: token,
+        since_pbp_seq: -1,
+      });
+      const data = await jsonp(url, { timeoutMs: 8000 });
+      if (!data || !data.ok) {
+        setStatus("No active game found (or connection error).");
+        return;
+      }
+      
+      const live = data.live || {};
+      const meta = live.meta || {};
+      const gameIdActive = String(meta.game_id || "").trim();
+      
+      if (!gameIdActive) {
+        setStatus("No active game found. Start a new game or use Previous Games to resume.");
+        return;
+      }
+      
+      // Found active game - join it using resumeGame
+      await resumeGame(gameIdActive, "");
+      setStatus(`Joined active game: ${gameIdActive}`);
+    } catch (err) {
+      setStatus(`Join failed: ${String(err.message || err)}`);
+    }
+  }
+
   // ✅ JSONP get_game_state
   async function resumeGame(gameIdToResume, archiveTabFromRow = "") {
     if (!apiUrl || !token) {
@@ -489,10 +525,20 @@ export default function App() {
       return;
     }
     
-    // ✅ Update local score immediately for responsive UI
+    // ✅ Update local score IMMEDIATELY (synchronous, before async POST) for instant UI feedback
     const pointsDelta = getPointsForEvent(eventType, delta);
     if (pointsDelta > 0) {
-      setLocalScore((prev) => ({
+      // Use functional update to ensure we're working with latest state
+      setLocalScore((prev) => {
+        const newScore = {
+          home: team === homeTeam ? prev.home + pointsDelta : prev.home,
+          away: team === awayTeam ? prev.away + pointsDelta : prev.away,
+        };
+        // Force immediate state update (React will batch, but this ensures it happens)
+        return newScore;
+      });
+      // Also update the backend tracking score immediately
+      setScore((prev) => ({
         home: team === homeTeam ? prev.home + pointsDelta : prev.home,
         away: team === awayTeam ? prev.away + pointsDelta : prev.away,
       }));
@@ -511,12 +557,13 @@ export default function App() {
       event_type: eventType,
       delta,
     };
-    try {
-      await postNoCors(apiUrl, payload);
+    
+    // Fire-and-forget: POST happens async, UI already updated
+    postNoCors(apiUrl, payload).then(() => {
       setStatus(`Logged ${eventType} — ${team} ${playerId} @ ${period} ${fmtClock(clockSec)}`);
-    } catch {
+    }).catch(() => {
       setStatus("Publish failed (network?).");
-    }
+    });
   }
   
   // ✅ Helper: get points for an event type
@@ -853,8 +900,35 @@ export default function App() {
           </div>
         </div>
 
+        {/* ✅ Join Current Game button (multi-user) */}
+        {token && (
+          <div style={card}>
+            <div style={{ fontWeight: 800, marginBottom: 8, color: "#0066cc" }}>
+              Multi-User: Join Active Game
+            </div>
+            <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 8 }}>
+              If another stat keeper has started a game, click below to join and track stats together.
+            </div>
+            <button
+              onClick={joinCurrentGame}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                fontWeight: 900,
+                backgroundColor: "#0066cc",
+                color: "#fff",
+                border: "none",
+                fontSize: 16,
+                width: "100%",
+              }}
+            >
+              JOIN CURRENT GAME
+            </button>
+          </div>
+        )}
+
         <div style={card}>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 1 Roster (one per line: “# Name”)</div>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Team 1 Roster (one per line: "# Name")</div>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
@@ -1067,6 +1141,12 @@ export default function App() {
                 <div style={{ fontWeight: 900 }}>
                   {g.date_iso ? `${String(g.date_iso).slice(0, 10)} — ` : ""}
                   {g.home_team} vs {g.away_team}
+                  {/* ✅ Visual indicator for active (non-archived) games */}
+                  {!g.archive_tab && (
+                    <span style={{ marginLeft: 8, padding: "2px 8px", backgroundColor: "#28a745", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 700 }}>
+                      ACTIVE
+                    </span>
+                  )}
                 </div>
                 <div style={{ opacity: 0.8 }}>
                   {g.period ? g.period : ""}
@@ -1360,15 +1440,16 @@ export default function App() {
                     padding: 12,
                     borderRadius: 12,
                     fontWeight: 900,
-                    backgroundColor: isSelectedForSub ? "#fff3cd" : "#0066cc",
-                    color: isSelectedForSub ? "#000" : "#fff",
-                    border: isSelectedForSub ? "3px solid #ff8800" : pendingEvent ? "2px solid #004499" : "2px solid #004499",
+                    backgroundColor: isSelectedForSub ? "#fff3cd" : "#e7f3ff",
+                    color: "#000",
+                    border: isSelectedForSub ? "3px solid #ff8800" : pendingEvent ? "3px solid #0066cc" : "2px solid #0066cc",
                     cursor: "pointer",
-                    fontSize: 16,
+                    fontSize: 18,
+                    textShadow: "none",
                   }}
                   title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                 >
-                  #{p.jersey}
+                  <span style={{ fontWeight: 950, fontSize: 20 }}>#{p.jersey}</span>
                 </button>
               );
             })}
@@ -1406,15 +1487,16 @@ export default function App() {
                       borderRadius: 12,
                       fontWeight: 900,
                       backgroundColor: isSelectedForSub ? "#d4edda" : "#ffffff",
-                      color: isSelectedForSub ? "#000" : "#333",
-                      border: isSelectedForSub ? "3px solid #28a745" : "2px solid #666",
+                      color: "#000",
+                      border: isSelectedForSub ? "3px solid #28a745" : "2px solid #333",
                       opacity: pendingEvent ? 0.4 : 1,
                       cursor: pendingEvent ? "not-allowed" : "pointer",
-                      fontSize: 16,
+                      fontSize: 18,
+                      textShadow: "none",
                     }}
                     title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                   >
-                    #{p.jersey}
+                    <span style={{ fontWeight: 950, fontSize: 20 }}>#{p.jersey}</span>
                   </button>
                 );
               })}
