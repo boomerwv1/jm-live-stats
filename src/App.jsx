@@ -372,22 +372,78 @@ export default function App() {
       });
       const data = await jsonp(url, { timeoutMs: 8000 });
       if (!data || !data.ok) {
-        setStatus("No active game found (or connection error).");
+        setStatus(`No active game found (${data?.error || "connection error"}).`);
         return;
       }
       
       const live = data.live || {};
       const meta = live.meta || {};
       const gameIdActive = String(meta.game_id || "").trim();
+      const homeTeamActive = String(meta.home_team || "").trim();
+      const awayTeamActive = String(meta.away_team || "").trim();
       
-      if (!gameIdActive) {
+      if (!gameIdActive || !homeTeamActive || !awayTeamActive) {
         setStatus("No active game found. Start a new game or use Previous Games to resume.");
         return;
       }
       
-      // Found active game - join it using resumeGame
-      await resumeGame(gameIdActive, "");
-      setStatus(`Joined active game: ${gameIdActive}`);
+      // Found active game - load state directly from live snapshot
+      setGameId(gameIdActive);
+      setHomeTeam(homeTeamActive);
+      setAwayTeam(awayTeamActive);
+      setPeriod(String(meta.period || "Q1"));
+      setClockSec(Number.isFinite(meta.clock_sec) ? Number(meta.clock_sec) : 8 * 60);
+      
+      // Set starters from live snapshot (or empty arrays if not set)
+      const startersHome = Array.isArray(live.starters_home) && live.starters_home.length === 5 ? live.starters_home : [];
+      const startersAway = Array.isArray(live.starters_away) && live.starters_away.length === 5 ? live.starters_away : [];
+      setHomeOn(startersHome);
+      setAwayOn(startersAway);
+      
+      // Set playtime from live snapshot
+      if (live.playtime_home && typeof live.playtime_home === "object") {
+        setHomePT(live.playtime_home);
+      } else {
+        setHomePT({});
+      }
+      if (live.playtime_away && typeof live.playtime_away === "object") {
+        setAwayPT(live.playtime_away);
+      } else {
+        setAwayPT({});
+      }
+      
+      // Set on-floor lineups (derived from starters + subs)
+      if (Array.isArray(live.on_floor_home) && live.on_floor_home.length === 5) {
+        setHomeOn(live.on_floor_home);
+      }
+      if (Array.isArray(live.on_floor_away) && live.on_floor_away.length === 5) {
+        setAwayOn(live.on_floor_away);
+      }
+      
+      // Set score
+      if (live.score) {
+        const backendScore = {
+          home: Number(live.score.home_pts || 0),
+          away: Number(live.score.away_pts || 0),
+        };
+        setLocalScore(backendScore);
+        setScore(backendScore);
+      } else {
+        setLocalScore({ home: 0, away: 0 });
+        setScore({ home: 0, away: 0 });
+      }
+      
+      setRunning(false);
+      setPendingEvent(null);
+      setSubOut("");
+      setSubIn("");
+      setTeam(homeTeamActive);
+      
+      // Note: roster will need to be loaded manually or synced later
+      // For now, user can enter rosters if needed
+      
+      setStatus(`Joined active game: ${gameIdActive} — ${homeTeamActive} vs ${awayTeamActive}`);
+      setScreen("game");
     } catch (err) {
       setStatus(`Join failed: ${String(err.message || err)}`);
     }
