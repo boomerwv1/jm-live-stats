@@ -223,6 +223,11 @@ export default function App() {
   const [clockSec, setClockSec] = useState(8 * 60);
   const [running, setRunning] = useState(false);
   const [clockEdit, setClockEdit] = useState(""); // MM:SS
+  
+  // ✅ Backend clock (authoritative for stat timestamps, especially for secondary users)
+  // This is synced from polling and always reflects what's actually in the backend
+  const [backendClockSec, setBackendClockSec] = useState(8 * 60);
+  const [backendPeriod, setBackendPeriod] = useState("Q1");
 
   const [status, setStatus] = useState("");
   const [score, setScore] = useState({ home: 0, away: 0 });
@@ -395,8 +400,12 @@ export default function App() {
       setGameId(gameIdActive);
       setHomeTeam(homeTeamActive);
       setAwayTeam(awayTeamActive);
-      setPeriod(String(meta.period || "Q1"));
-      setClockSec(Number.isFinite(meta.clock_sec) ? Number(meta.clock_sec) : 8 * 60);
+      const initialPeriod = String(meta.period || "Q1");
+      const initialClock = Number.isFinite(meta.clock_sec) ? Number(meta.clock_sec) : 8 * 60;
+      setPeriod(initialPeriod);
+      setClockSec(initialClock);
+      setBackendPeriod(initialPeriod);
+      setBackendClockSec(initialClock);
       
       // Set starters from live snapshot (or empty arrays if not set)
       const startersHome = Array.isArray(live.starters_home) && live.starters_home.length === 5 ? live.starters_home : [];
@@ -477,8 +486,12 @@ export default function App() {
       setGameId(g.game_id);
       if (g.home_team) setHomeTeam(g.home_team);
       if (g.away_team) setAwayTeam(g.away_team);
-      setPeriod(g.period || "Q1");
-      setClockSec(Number.isFinite(g.clock_sec) ? g.clock_sec : 8 * 60);
+      const resumePeriod = g.period || "Q1";
+      const resumeClock = Number.isFinite(g.clock_sec) ? g.clock_sec : 8 * 60;
+      setPeriod(resumePeriod);
+      setClockSec(resumeClock);
+      setBackendPeriod(resumePeriod);
+      setBackendClockSec(resumeClock);
 
       // ✅ starters: if present, use those; else default first 5
       const sh = Array.isArray(g.starters_home) ? g.starters_home : null;
@@ -594,6 +607,12 @@ export default function App() {
       return;
     }
     
+    // ✅ Use backend clock for timestamps (authoritative, synced from polling)
+    // Primary users: backendClockSec matches their local clockSec (when stopped) or is close
+    // Secondary users: backendClockSec is what primary has, ensuring consistent timestamps
+    const statClockSec = backendClockSec;
+    const statPeriod = backendPeriod;
+    
     // ✅ Update local score IMMEDIATELY (synchronous, before async POST) for instant UI feedback
     const pointsDelta = getPointsForEvent(eventType, delta);
     if (pointsDelta > 0) {
@@ -619,8 +638,8 @@ export default function App() {
       event_id: uuid(),
       ts_iso: new Date().toISOString(),
       game_id: gameId,
-      period,
-      clock_sec: clockSec,
+      period: statPeriod,
+      clock_sec: statClockSec,
       team,
       player_id: playerId,
       event_type: eventType,
@@ -629,7 +648,7 @@ export default function App() {
     
     // Fire-and-forget: POST happens async, UI already updated
     postNoCors(apiUrl, payload).then(() => {
-      setStatus(`Logged ${eventType} — ${team} ${playerId} @ ${period} ${fmtClock(clockSec)}`);
+      setStatus(`Logged ${eventType} — ${team} ${playerId} @ ${statPeriod} ${fmtClock(statClockSec)}`);
     }).catch(() => {
       setStatus("Publish failed (network?).");
     });
@@ -685,21 +704,25 @@ export default function App() {
       setStatus("Set token.");
       return;
     }
+    // ✅ Use backend clock for timestamps (authoritative, synced from polling)
+    const statClockSec = backendClockSec;
+    const statPeriod = backendPeriod;
+    
     const payload = {
       access_token: token,
       action: "sub",
       event_id: uuid(),
       ts_iso: new Date().toISOString(),
       game_id: gameId,
-      period,
-      clock_sec: clockSec,
+      period: statPeriod,
+      clock_sec: statClockSec,
       team: teamName,
       player_out: outId,
       player_in: inId,
     };
     try {
       await postNoCors(apiUrl, payload);
-      setStatus(`SUB ${teamName}: ${outId} → ${inId} @ ${period} ${fmtClock(clockSec)}`);
+      setStatus(`SUB ${teamName}: ${outId} → ${inId} @ ${statPeriod} ${fmtClock(statClockSec)}`);
     } catch {
       setStatus("Sub publish failed.");
     }
@@ -710,14 +733,18 @@ export default function App() {
       setStatus("Set token.");
       return;
     }
+    // ✅ Use backend clock for timestamps (authoritative, synced from polling)
+    const statClockSec = backendClockSec;
+    const statPeriod = backendPeriod;
+    
     const payload = {
       access_token: token,
       action: "stat",
       event_id: uuid(),
       ts_iso: new Date().toISOString(),
       game_id: gameId,
-      period,
-      clock_sec: clockSec,
+      period: statPeriod,
+      clock_sec: statClockSec,
       team: team,
       player_id: "", // jump ball is not player-specific
       event_type: "JUMP_BALL",
@@ -725,7 +752,7 @@ export default function App() {
     };
     try {
       await postNoCors(apiUrl, payload);
-      setStatus(`Logged JUMP BALL @ ${period} ${fmtClock(clockSec)}`);
+      setStatus(`Logged JUMP BALL @ ${statPeriod} ${fmtClock(statClockSec)}`);
     } catch {
       setStatus("Publish failed (network?).");
     }
@@ -805,19 +832,30 @@ export default function App() {
           });
         }
 
+        // ✅ Always update backend clock state (for stat timestamps)
+        if (meta.period) {
+          setBackendPeriod(String(meta.period));
+        }
+        if (Number.isFinite(meta.clock_sec)) {
+          setBackendClockSec(Number(meta.clock_sec));
+        }
+        
         // ✅ Clock sync rules:
-        // - Primary user (creator): Only sync when clock is NOT running locally (avoids fighting the active timer)
-        // - Secondary user (joined): Always sync from backend (read-only, they don't control clock)
+        // - Primary user (creator): Only sync local clock when NOT running locally (avoids fighting the active timer)
+        // - Secondary user (joined): Always sync local clock from backend (read-only, they don't control clock)
         if (isPrimaryUser) {
-          // Primary user: only sync when clock is stopped
+          // Primary user: only sync when clock is stopped (display matches backend)
           if (!running) {
             if (meta.period) setPeriod(String(meta.period));
             if (Number.isFinite(meta.clock_sec)) setClockSec(Number(meta.clock_sec));
           }
         } else {
-          // Secondary user: always sync from backend (read-only)
+          // Secondary user: ALWAYS sync local display from backend (read-only, continuous updates)
           if (meta.period) setPeriod(String(meta.period));
-          if (Number.isFinite(meta.clock_sec)) setClockSec(Number(meta.clock_sec));
+          if (Number.isFinite(meta.clock_sec)) {
+            // Force immediate sync for secondary users (they see primary's clock in real-time)
+            setClockSec(Number(meta.clock_sec));
+          }
           // Also sync running state (if backend has it running, stop it locally - only primary controls it)
           setRunning(false);
         }
