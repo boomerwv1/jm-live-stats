@@ -226,6 +226,7 @@ export default function App() {
 
   const [status, setStatus] = useState("");
   const [score, setScore] = useState({ home: 0, away: 0 });
+  const [localScore, setLocalScore] = useState({ home: 0, away: 0 }); // ✅ Local score for immediate updates
   const [pbp, setPbp] = useState([]);
   const [pbpSeq, setPbpSeq] = useState(-1);
 
@@ -417,6 +418,10 @@ export default function App() {
       const tab = (archiveTabFromRow || g.archive_tab || "").trim();
       if (tab) setLastArchiveTab(tab);
 
+      // ✅ Initialize score (will be synced from backend on first poll)
+      setLocalScore({ home: 0, away: 0 });
+      setScore({ home: 0, away: 0 });
+      
       setStatus(`Resumed ${g.game_id} @ ${g.period} ${fmtClock(g.clock_sec)}`);
       setScreen("game");
     } catch (err) {
@@ -449,9 +454,11 @@ export default function App() {
     setRunning(false);
     setTeam(homeTeam);
 
-    // init starter selection defaults + playtime
+    // init starter selection defaults + playtime + score
     initDefaultStarting5();
     initPlaytimeZeros();
+    setLocalScore({ home: 0, away: 0 });
+    setScore({ home: 0, away: 0 });
 
     const payload = {
       access_token: token,
@@ -481,6 +488,16 @@ export default function App() {
       setStatus("Set token.");
       return;
     }
+    
+    // ✅ Update local score immediately for responsive UI
+    const pointsDelta = getPointsForEvent(eventType, delta);
+    if (pointsDelta > 0) {
+      setLocalScore((prev) => ({
+        home: team === homeTeam ? prev.home + pointsDelta : prev.home,
+        away: team === awayTeam ? prev.away + pointsDelta : prev.away,
+      }));
+    }
+    
     const payload = {
       access_token: token,
       action: "stat",
@@ -500,6 +517,16 @@ export default function App() {
     } catch {
       setStatus("Publish failed (network?).");
     }
+  }
+  
+  // ✅ Helper: get points for an event type
+  function getPointsForEvent(eventType, delta) {
+    if (delta <= 0) return 0;
+    const e = String(eventType || "").toUpperCase();
+    if (e === "2M") return 2;
+    if (e === "3M") return 3;
+    if (e === "FTM") return 1;
+    return 0;
   }
 
   async function publishMeta() {
@@ -644,10 +671,21 @@ export default function App() {
         const meta = live.meta || {};
 
         // Score sanity check display (authoritative from backend totals)
+        // ✅ Sync backend score - use backend as source of truth for multi-user consistency
         if (live.score) {
-          setScore({
+          const backendScore = {
             home: Number(live.score.home_pts || 0),
             away: Number(live.score.away_pts || 0),
+          };
+          setScore(backendScore);
+          // ✅ Update local score to backend (handles multi-user updates)
+          // Backend is authoritative - if it differs, another user scored
+          setLocalScore((prev) => {
+            // Only update if backend is different (avoids unnecessary re-renders)
+            if (prev.home !== backendScore.home || prev.away !== backendScore.away) {
+              return backendScore;
+            }
+            return prev;
           });
         }
 
@@ -1103,13 +1141,44 @@ export default function App() {
           <div style={{ fontSize: 32, fontWeight: 800 }}>{fmtClock(clockSec)}</div>
 
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => setRunning((r) => !r)} style={{ padding: "10px 12px", fontWeight: 900 }}>
+            <button 
+              onClick={() => setRunning((r) => !r)} 
+              style={{ 
+                padding: "10px 12px", 
+                fontWeight: 900,
+                backgroundColor: running ? "#dc3545" : "#28a745",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                fontSize: 14,
+              }}
+            >
               {running ? "STOP" : "START"}
             </button>
-            <button onClick={() => setClockSec((s) => Math.max(0, s + 1))} style={{ padding: "10px 12px" }}>
+            <button 
+              onClick={() => setClockSec((s) => Math.max(0, s + 1))} 
+              style={{ 
+                padding: "10px 12px",
+                backgroundColor: "#f8f9fa",
+                border: "2px solid #666",
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
               +1
             </button>
-            <button onClick={() => setClockSec((s) => Math.max(0, s - 1))} style={{ padding: "10px 12px" }}>
+            <button 
+              onClick={() => setClockSec((s) => Math.max(0, s - 1))} 
+              style={{ 
+                padding: "10px 12px",
+                backgroundColor: "#f8f9fa",
+                border: "2px solid #666",
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
               -1
             </button>
           </div>
@@ -1136,20 +1205,36 @@ export default function App() {
               setStatus(`Clock set to ${fmtClock(sec)}`);
               setClockEdit("");
             }}
-            style={{ padding: "10px 12px", fontWeight: 900 }}
+            style={{ 
+              padding: "10px 12px", 
+              fontWeight: 900,
+              backgroundColor: "#0066cc",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 14,
+            }}
           >
             SET CLOCK
           </button>
           <button
             onClick={publishJumpBall}
-            style={{ padding: "10px 12px", fontWeight: 900 }}
+            style={{ 
+              padding: "10px 12px", 
+              fontWeight: 900,
+              backgroundColor: "#6c757d",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 14,
+            }}
             title="Logs an event (no stat delta) for auditing/resume"
           >
             JUMP BALL
           </button>
-          <div style={{ marginLeft: "auto", fontWeight: 900 }}>
-            {/* ✅ Live score sanity check (from backend totals) */}
-            {homeTeam}: {score.home} &nbsp;|&nbsp; {awayTeam}: {score.away}
+          <div style={{ marginLeft: "auto", fontWeight: 900, fontSize: 18, color: "#000" }}>
+            {/* ✅ Live score: local for immediate updates, backend for multi-user sync */}
+            {homeTeam}: <span style={{ color: "#0066cc" }}>{localScore.home}</span> &nbsp;|&nbsp; {awayTeam}: <span style={{ color: "#0066cc" }}>{localScore.away}</span>
           </div>
         </div>
       </div>
@@ -1171,7 +1256,16 @@ export default function App() {
             setSubIn("");
             setPendingEvent(null);
           }}
-          style={{ flex: 1, padding: 10, fontWeight: team === homeTeam ? 900 : 700 }}
+          style={{ 
+            flex: 1, 
+            padding: 10, 
+            fontWeight: team === homeTeam ? 900 : 700,
+            backgroundColor: team === homeTeam ? "#0066cc" : "#f8f9fa",
+            color: team === homeTeam ? "#fff" : "#000",
+            border: team === homeTeam ? "none" : "2px solid #666",
+            borderRadius: 8,
+            fontSize: 16,
+          }}
         >
           {homeTeam}
         </button>
@@ -1182,7 +1276,16 @@ export default function App() {
             setSubIn("");
             setPendingEvent(null);
           }}
-          style={{ flex: 1, padding: 10, fontWeight: team === awayTeam ? 900 : 700 }}
+          style={{ 
+            flex: 1, 
+            padding: 10, 
+            fontWeight: team === awayTeam ? 900 : 700,
+            backgroundColor: team === awayTeam ? "#0066cc" : "#f8f9fa",
+            color: team === awayTeam ? "#fff" : "#000",
+            border: team === awayTeam ? "none" : "2px solid #666",
+            borderRadius: 8,
+            fontSize: 16,
+          }}
         >
           {awayTeam}
         </button>
@@ -1201,8 +1304,11 @@ export default function App() {
             style={{
               padding: 12,
               borderRadius: 12,
-              border: pendingEvent === code ? "2px solid #000" : "1px solid #ddd",
+              border: pendingEvent === code ? "3px solid #000" : "2px solid #666",
+              backgroundColor: pendingEvent === code ? "#000" : "#fff",
+              color: pendingEvent === code ? "#fff" : "#000",
               fontWeight: 900,
+              fontSize: 14,
             }}
           >
             {label}
@@ -1224,7 +1330,7 @@ export default function App() {
 
         {/* ON-COURT PLAYERS (pinned to top, visually distinct) */}
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#0066cc" }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#0066cc", backgroundColor: "#e7f3ff", padding: "6px 8px", borderRadius: 6 }}>
             ON COURT ({onFloorPlayers.length}/5)
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
@@ -1254,9 +1360,11 @@ export default function App() {
                     padding: 12,
                     borderRadius: 12,
                     fontWeight: 900,
-                    backgroundColor: isSelectedForSub ? "#fff3cd" : "#e7f3ff",
-                    border: isSelectedForSub ? "3px solid #ff8800" : pendingEvent ? "2px solid #0066cc" : "1px solid #0066cc",
+                    backgroundColor: isSelectedForSub ? "#fff3cd" : "#0066cc",
+                    color: isSelectedForSub ? "#000" : "#fff",
+                    border: isSelectedForSub ? "3px solid #ff8800" : pendingEvent ? "2px solid #004499" : "2px solid #004499",
                     cursor: "pointer",
+                    fontSize: 16,
                   }}
                   title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                 >
@@ -1270,7 +1378,7 @@ export default function App() {
         {/* BENCH PLAYERS (below on-court, always visible) */}
         {benchPlayers.length > 0 && (
           <div>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#666" }}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 14, color: "#666", backgroundColor: "#f8f9fa", padding: "6px 8px", borderRadius: 6 }}>
               BENCH ({benchPlayers.length})
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
@@ -1297,10 +1405,12 @@ export default function App() {
                       padding: 12,
                       borderRadius: 12,
                       fontWeight: 900,
-                      backgroundColor: isSelectedForSub ? "#d4edda" : "#f8f9fa",
-                      border: isSelectedForSub ? "3px solid #28a745" : "1px solid #ddd",
+                      backgroundColor: isSelectedForSub ? "#d4edda" : "#ffffff",
+                      color: isSelectedForSub ? "#000" : "#333",
+                      border: isSelectedForSub ? "3px solid #28a745" : "2px solid #666",
                       opacity: pendingEvent ? 0.4 : 1,
                       cursor: pendingEvent ? "not-allowed" : "pointer",
+                      fontSize: 16,
                     }}
                     title={`${p.name || `#${p.jersey}`} • Minutes: ${fmtMinutesFromSec(sec || 0)}`}
                   >
